@@ -21,6 +21,12 @@ func ljust(s string, w int) string {
 	return runewidth.FillRight(s, w)
 }
 
+// rjust pads on the left to w cells, for the columns holding numbers: a figure
+// is read from its right-hand end, so a column of them has to line up there.
+func rjust(s string, w int) string {
+	return runewidth.FillLeft(s, w)
+}
+
 // truncateCells cuts s to at most limit cells, ending in an ellipsis when
 // anything was dropped — value[:limit-1] + "…", measured in cells.
 func truncateCells(s string, limit int) string {
@@ -28,6 +34,14 @@ func truncateCells(s string, limit int) string {
 		return s
 	}
 	return runewidth.Truncate(s, limit, "…")
+}
+
+// tailCells keeps the last limit cells of s behind an ellipsis.
+func tailCells(s string, limit int) string {
+	if cells(s) <= limit {
+		return s
+	}
+	return runewidth.TruncateLeft(s, cells(s)-(limit-1), "…")
 }
 
 // Two questions about an escape sequence, and they are not the same one.
@@ -180,6 +194,12 @@ const (
 	frameGutter = " │ "
 	frameRight  = " │"
 )
+
+// frameCost is what a frame takes out of the width before the columns are
+// budgeted. budget() strikes its widths for a bare table — two-space gutters,
+// nothing at either end — and a frame adds a cell to each of the cols-1
+// gutters and two cells at each end.
+func frameCost(cols int) int { return (cols - 1) + 2*cells(frameLeft) }
 
 // framedTable is table() in a box: the columns divided by verticals rather
 // than by space, and three horizontals — over the heads, under them, and under

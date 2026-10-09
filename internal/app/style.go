@@ -58,6 +58,13 @@ const (
 	// meaning exactly what it meant.
 	headColor = 231
 	headBold  = true
+
+	// The table's foot line takes the same white and not the weight. It says
+	// what the table adds up to, which is content and not furniture, so the
+	// greys the rules wear would have sunk it into the rule it sits under —
+	// but it is a caption on the table rather than a heading over it, and
+	// leaving the bold to the heads is what keeps them the top of the thing.
+	footColor = headColor
 )
 
 const reset = "\033[0m"

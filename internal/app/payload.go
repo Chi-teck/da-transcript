@@ -1,0 +1,157 @@
+package app
+
+import (
+	"bytes"
+	"cmp"
+	"encoding/json"
+)
+
+// Typed views of the JSON the store keeps in session_items.message_json. Only
+// what the renderer reads is declared; everything else passes through. Fields
+// the store is loose about are flexString or json.RawMessage so one odd value
+// does not take a whole row down.
+//
+// This is the shape of what the store hands over, not a rendering decision, so
+// it sits beside the store rather than inside the renderer: how a tool item is
+// drawn changes often and what a tool item contains does not.
+//
+// Base64 and provider payloads (inline_data, image_url.url, thinking and
+// thought signatures, openai_response, provider_state), tool_definitions and
+// compaction are not declared, so the decoder skips them.
+
+type itemData struct {
+	Role             flexString      `json:"role"`              // message
+	Content          flexString      `json:"content"`           // message
+	MultiContent     []messagePart   `json:"multi_content"`     // user, tool
+	ReasoningContent flexString      `json:"reasoning_content"` // assistant
+	ToolCalls        []toolCall      `json:"tool_calls"`        // assistant
+	ToolCallID       flexString      `json:"tool_call_id"`      // tool
+	IsError          json.RawMessage `json:"is_error"`          // tool; truthy() reads it
+	MessageID        flexString      `json:"message_id"`        // user, assistant
+	FinishReason     flexString      `json:"finish_reason"`     // assistant; absent = cut off or streaming
+	Model            flexString      `json:"model"`             // assistant, evaluation: "provider/model"
+	Usage            *stepUsage      `json:"usage"`             // assistant, evaluation; a summary's usage_json is put here
+	Cost             json.RawMessage `json:"cost"`              // assistant, evaluation
+	CreatedAt        flexString      `json:"created_at"`        // all but subsession and summary
+	Message          flexString      `json:"message"`           // error (and termination)
+	Code             flexString      `json:"code"`              // error
+}
+
+// messagePart is one multi_content entry: text, document, image_url, or a type
+// kept by name. image_url.url is a data: URL and is not declared, so it is
+// never decoded.
+type messagePart struct {
+	Type     flexString    `json:"type"`
+	Text     flexString    `json:"text"`
+	Document *partDocument `json:"document"`
+}
+
+// partDocument is an attachment. Its bytes sit in source.inline_data as
+// base64; that is not declared either.
+type partDocument struct {
+	Name     flexString `json:"name"`
+	MimeType flexString `json:"mime_type"`
+}
+
+type toolCall struct {
+	ID       flexString `json:"id"`
+	Function struct {
+		Name      flexString    `json:"name"`
+		Arguments toolArguments `json:"arguments"`
+	} `json:"function"`
+}
+
+type stepUsage struct {
+	Input      json.RawMessage `json:"input_tokens"`
+	Output     json.RawMessage `json:"output_tokens"`
+	CacheRead  json.RawMessage `json:"cached_input_tokens"`
+	CacheWrite json.RawMessage `json:"cached_write_tokens"`
+}
+
+// toolArguments is a call's function.arguments: a JSON string holding the
+// JSON the model wrote, decoded a second time here. JSON is kept raw and not
+// re-encoded, so the model's key order survives into the in: block. Anything
+// else — malformed arguments, plain text — is kept as a JSON string of that
+// text, so it stays printable, and "" is nil. An arguments value that is
+// already an object comes through flexString as its compact JSON. It never
+// fails the row.
+type toolArguments json.RawMessage
+
+func (a *toolArguments) UnmarshalJSON(data []byte) error {
+	var s flexString
+	_ = s.UnmarshalJSON(data) // never fails
+	switch {
+	case s == "":
+		*a = nil
+	case json.Valid([]byte(s)):
+		*a = toolArguments(s)
+	default:
+		// Not json.Marshal: it would write a shell command's && and > as
+		// \u0026\u0026 and \u003e.
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(string(s)) // a string always encodes
+		*a = bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	}
+	return nil
+}
+
+// decodeItem reads one session_items row into r. It never fails: whatever this
+// version cannot read, it names in r.unknown, and that item adds no tokens.
+// JSON that does not decode leaves r.data zero, so the item takes the time of
+// the one before it.
+func decodeItem(r *itemRow, message, usage []byte) {
+	// read decodes message_json into r.data; NULL leaves it zero.
+	read := func() bool {
+		if message == nil {
+			return true
+		}
+		if err := json.Unmarshal(message, &r.data); err != nil {
+			r.data = itemData{}
+			r.unknown = r.typ + " (unreadable)"
+			return false
+		}
+		return true
+	}
+	switch r.typ {
+	case "message":
+		if !read() {
+			return
+		}
+		switch r.data.Role {
+		case "user", "system", "assistant", "tool":
+		case "":
+			r.unknown = "message (no role)"
+		default:
+			r.unknown = "message (role " + string(r.data.Role) + ")"
+		}
+	case "error", "evaluation", "termination":
+		read()
+	case "summary":
+		// message_json, which a provider-native compaction fills with the
+		// provider's result, is not read; the summarising call's usage is.
+		if len(usage) > 0 {
+			if err := json.Unmarshal(usage, &r.data.Usage); err != nil {
+				r.data = itemData{}
+				r.unknown = "summary (unreadable)"
+			}
+		}
+	case "subsession":
+		// message_json is NULL: the row only points at the child.
+	default:
+		// Decoded only for its created_at; a usage it carries is not trusted.
+		if read() {
+			r.unknown = cmp.Or(r.typ, "item (no type)")
+		}
+	}
+}
+
+func numberValue(raw json.RawMessage) (float64, bool) {
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err != nil || n == "" {
+		return 0, false
+	}
+	f, err := n.Float64()
+	return f, err == nil
+}

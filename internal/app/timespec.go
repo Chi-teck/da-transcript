@@ -131,6 +131,22 @@ func atoi(s string) int {
 	return n
 }
 
+// shortStamp is the session table's timestamp: stamp() with the seconds
+// dropped. The date is spelled out in full — a session table is read months
+// after the fact as often as minutes, and a bare 01-02 leaves the reader
+// guessing at the year. Space rather than T between the halves, to match the
+// stamp heading every message.
+func shortStamp(ms int64) string {
+	return time.UnixMilli(ms).Format("2006-01-02 15:04")
+}
+
+// dayStamp is the date on its own, for the places a clock time would be noise:
+// the span a table covers is a matter of days, and the rows themselves already
+// say what happened at what minute.
+func dayStamp(ms int64) string {
+	return time.UnixMilli(ms).Format("2006-01-02")
+}
+
 // spanText is how long something ran, in one unit and four cells: a table
 // column has room for a magnitude, not for a duration spelled out, and the
 // rows already carry the minute each session started at.

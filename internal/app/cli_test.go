@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -143,5 +146,142 @@ func TestParseArgsVersion(t *testing.T) {
 	// It answers whatever else is on the line, as --help does.
 	if _, err := parse(t, "--version", "stray"); !errors.Is(err, errVersionPrinted) {
 		t.Errorf("--version with a positional: %v", err)
+	}
+}
+
+func TestRunErrors(t *testing.T) {
+	t.Setenv("COLUMNS", "")
+	var stdout, stderr bytes.Buffer
+
+	missing := filepath.Join(t.TempDir(), "no.db")
+	err := run([]string{"--db", missing}, &stdout, &stderr)
+	if err == nil || isUsage(err) ||
+		err.Error() != fmt.Sprintf("no docker-agent database at %s (try --db)", missing) {
+		t.Errorf("missing db: %v", err)
+	}
+
+	d := newTestDB(t)
+	err = run([]string{"--db", d.path, "--everywhere", "-o", "/proc/nope/x.md"}, &stdout, &stderr)
+	if err == nil || !strings.HasPrefix(err.Error(), "cannot write /proc/nope/x.md:") {
+		t.Errorf("unwritable out: %v", err)
+	}
+}
+
+func TestRunEmptyMessages(t *testing.T) {
+	t.Setenv("COLUMNS", "")
+	d := newTestDB(t)
+	// The reason a transcript is empty is an answer about the query, not
+	// transcript content: it goes to stderr, and stdout stays clean.
+	out := func(args ...string) string {
+		var stdout, stderr bytes.Buffer
+		if err := run(append([]string{"--db", d.path}, args...), &stdout, &stderr); err != nil {
+			t.Fatalf("run(%v): %v", args, err)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("run(%v) wrote to stdout: %q", args, stdout.String())
+		}
+		return stderr.String()
+	}
+
+	if got := out("--everywhere"); !strings.Contains(got, "This database has no sessions at all.") {
+		t.Errorf("no sessions: %q", got)
+	}
+
+	d.session("a", "", "t", "/somewhere/else", "2026-08-17T10:00:00Z")
+	d.userText("a", "2026-08-17T10:00:00Z", "hi")
+	// The root is named the way it was given, made absolute and no more.
+	if got := out("--root", "/not/there"); !strings.Contains(got,
+		"No docker-agent session has ever run under /not/there — try --root or --everywhere.") {
+		t.Errorf("wrong root: %q", got)
+	}
+	if got := out("--everywhere", "--all", "--session", "nope"); !strings.Contains(got,
+		"1 session(s) in scope, none matching --session.") {
+		t.Errorf("filtered out: %q", got)
+	}
+	if got := out("--everywhere", "--since", "2100-01-01"); !strings.Contains(got,
+		"Nothing from 1 session(s) in this window — try --all.") {
+		t.Errorf("empty window: %q", got)
+	}
+	if got := out("--everywhere", "--since", "2100-01-01", "--list"); !strings.Contains(got,
+		"Nothing from 1 session(s) in this window") {
+		t.Errorf("empty list: %q", got)
+	}
+	// With --all the hint would be useless, so it goes — here the one session
+	// in scope has no items, so no window holds anything of it.
+	d2 := newTestDB(t)
+	d2.session("b", "", "t", "/p", "2026-08-17T10:00:00Z")
+	var so, se bytes.Buffer
+	if err := run([]string{"--db", d2.path, "--everywhere", "--all"}, &so, &se); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(se.String(), "Nothing from 1 session(s) in this window.\n") ||
+		strings.Contains(se.String(), "try --all") {
+		t.Errorf("--all drops the hint: %q", se.String())
+	}
+}
+
+func TestRunWritesFile(t *testing.T) {
+	t.Setenv("COLUMNS", "")
+	d := newTestDB(t)
+	d.session("a", "", "hello file", "/p", "2026-08-17T10:00:00Z")
+	d.userText("a", "2026-08-17T10:00:00Z", "hello file")
+
+	path := filepath.Join(t.TempDir(), "out.md")
+	var stdout, stderr bytes.Buffer
+	// The --list table, until there is a transcript to write.
+	if err := run([]string{"--db", d.path, "--everywhere", "--all", "--list", "-o", path}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout not empty with --out: %q", stdout.String())
+	}
+	if got := stderr.String(); got != "wrote "+path+"\n" {
+		t.Errorf("stderr = %q", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hello file") || strings.Contains(string(data), "\033[") {
+		t.Errorf("file content: %q", data)
+	}
+}
+
+// docker-agent records the directory as the shell saw it, symlinks and all,
+// so a root reached through a symlink has to be compared the same way: as
+// given, not resolved.
+func TestRootKeepsSymlinks(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if opts, err := parse(t, "--root", link); err != nil || opts.root != link {
+		t.Fatalf("--root %s parsed as %v, %v", link, opts, err)
+	}
+	d := newTestDB(t)
+	d.session("a", "", "Through the link", link, "2026-08-17T10:00:00Z")
+	d.userText("a", "2026-08-17T10:00:00Z", "hi")
+	t.Setenv("COLUMNS", "")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--db", d.path, "--list", "--all", "--root", link}, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Through the link") {
+		t.Errorf("session under the symlinked root not listed:\n%s%s", stdout.String(), stderr.String())
+	}
+}
+
+// A tag copied out of --list selects its session, the subagent mark included.
+func TestSessionTakesListedTag(t *testing.T) {
+	d := zooDB(t)
+	t.Setenv("COLUMNS", "")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--db", d.path, "--everywhere", "--all", "--list", "--session", "zoo003↓"},
+		&stdout, &stderr); err != nil {
+		t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "zoo003↓") || strings.Contains(out, "zoo001") ||
+		!strings.Contains(out, "1 session since") {
+		t.Errorf("--session zoo003↓ listed:\n%s%s", out, stderr.String())
 	}
 }

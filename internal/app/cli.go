@@ -4,13 +4,18 @@
 package app
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -85,32 +90,6 @@ func expandUser(p string) string {
 	return p
 }
 
-// resolvePath is Path.resolve(strict=False): absolute, symlinks followed as
-// far as the path exists.
-func resolvePath(p string) string {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
-		return real
-	}
-	// Resolve the longest existing prefix and append the rest untouched.
-	rest := ""
-	dir := abs
-	for {
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return abs
-		}
-		rest = filepath.Join(filepath.Base(dir), rest)
-		dir = parent
-		if real, err := filepath.EvalSymlinks(dir); err == nil {
-			return filepath.Join(real, rest)
-		}
-	}
-}
-
 func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	opts := &options{stderr: stderr}
 	fs := pflag.NewFlagSet("da-transcript", pflag.ContinueOnError)
@@ -166,13 +145,24 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 		return nil, usageError{fmt.Errorf("unrecognized arguments: %s", strings.Join(rest, " "))}
 	}
 	opts.tools, opts.color = tools.value, color.value
+	// A tag copied from --list carries the subagent mark, which is no part of
+	// the id it is matched against.
+	for i, frag := range opts.sessions {
+		opts.sessions[i] = strings.TrimSuffix(frag, "↓")
+	}
 
-	// A root of "" is how the rest of this asks for the whole database.
+	// A root of "" is how the rest of this asks for the whole database. The
+	// root is made absolute and not resolved: docker-agent records the
+	// directory as the shell sees it, symlinks included, so a resolved root
+	// would miss a project reached through one.
 	if !everywhere {
 		if root == "" {
 			root, _ = os.Getwd()
 		}
-		opts.root = resolvePath(expandUser(root))
+		opts.root = expandUser(root)
+		if abs, err := filepath.Abs(opts.root); err == nil {
+			opts.root = abs
+		}
 	}
 	opts.db = expandUser(opts.db)
 	opts.out = expandUser(opts.out)
@@ -315,6 +305,73 @@ func Main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	_, err := parseArgs(args, stdout, stderr)
-	return err
+	opts, err := parseArgs(args, stdout, stderr)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := openStore(ctx, opts.db)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	t, err := build(ctx, st, opts)
+	if err != nil {
+		return err
+	}
+	paint := opts.paint
+	var out []string
+	if opts.list {
+		// The table's counts are of whole sessions, so they are asked for here
+		// rather than taken from what build() happened to render.
+		ids := make([]string, len(t.used))
+		for i, s := range t.used {
+			ids[i] = s.id
+		}
+		counts, err := st.messageCounts(ctx, ids)
+		if err != nil {
+			return err
+		}
+		out = legend(t.used, opts.root, opts.width, true, counts, paint)
+	}
+	// An empty result is an answer about the query, not transcript content:
+	// it goes to stderr, and the transcript's sink stays clean.
+	if len(out) == 0 && t.empty != "" {
+		_, _ = fmt.Fprintln(stderr, t.empty)
+	}
+
+	// The tail, when there is one, goes wherever the transcript went.
+	sink, sinkName := stdout, "output"
+	if opts.out != "" {
+		f, err := os.Create(opts.out)
+		if err != nil {
+			if pe, ok := errors.AsType[*fs.PathError](err); ok {
+				err = pe.Err
+			}
+			return fmt.Errorf("cannot write %s: %v", opts.out, err)
+		}
+		defer func() { _ = f.Close() }()
+		sink, sinkName = f, opts.out
+	}
+	w := bufio.NewWriterSize(sink, 64<<10)
+	if err := writeLines(w, out); err != nil {
+		return fmt.Errorf("cannot write %s: %v", sinkName, err)
+	}
+	if opts.out != "" {
+		_, _ = fmt.Fprintf(stderr, "wrote %s\n", opts.out)
+	}
+	return nil
+}
+
+// writeLines buffers the lines out and reports the first write error, which
+// bufio keeps sticky until Flush.
+func writeLines(w *bufio.Writer, lines []string) error {
+	for _, line := range lines {
+		_, _ = w.WriteString(line)
+		_ = w.WriteByte('\n')
+	}
+	return w.Flush()
 }

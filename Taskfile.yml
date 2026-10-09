@@ -37,6 +37,12 @@ tasks:
     cmds:
       - 'go test ./...'
 
+  test:update:
+    desc: 'Regenerate the golden files, then re-run the tests'
+    cmds:
+      - 'go test ./... -update'
+      - 'go test ./...'
+
   lint:
     desc: 'Run go vet and golangci-lint'
     cmds:

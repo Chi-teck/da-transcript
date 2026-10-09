@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -277,6 +279,31 @@ func TestWrapForeignEscapes(t *testing.T) {
 		for _, l := range got {
 			if visibleCells(l) > 5 {
 				t.Errorf("wrap(%q) line %q is %d cells", line, l, visibleCells(l))
+			}
+		}
+	}
+}
+
+// TestWidthInvariant is what keeps the layout honest: whatever the terminal
+// width, no emitted line may exceed it.
+func TestWidthInvariant(t *testing.T) {
+	d := zooDB(t)
+	cases := [][]string{
+		{"--list"},
+		{"--list", "--color", "always"},
+	}
+	for _, width := range []int{60, 80, 100, 120, 200} {
+		for _, args := range cases {
+			t.Setenv("COLUMNS", strconv.Itoa(width))
+			var stdout, stderr bytes.Buffer
+			full := append([]string{"--db", d.path, "--everywhere", "--all"}, args...)
+			if err := run(full, &stdout, &stderr); err != nil {
+				t.Fatalf("run(%v): %v", full, err)
+			}
+			for line := range strings.SplitSeq(stdout.String(), "\n") {
+				if got := visibleCells(line); got > width {
+					t.Errorf("COLUMNS=%d %v: %d-cell line %q", width, args, got, stripSGR(line))
+				}
 			}
 		}
 	}
