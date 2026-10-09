@@ -194,6 +194,18 @@ func TestWrapANSI(t *testing.T) {
 			t.Errorf("ansi line %q is %d visible cells", line, visibleCells(line))
 		}
 	}
+	// A space a span closes over is trimmed like any other trailing space, on
+	// a line that fits and on the last piece of one that folds.
+	for _, line := range []string{"aaa ", "aaa bbb ccc "} {
+		plain := wrap("| ", line, 9)
+		coloured := wrap("| ", red+line+reset, 9)
+		for i := range coloured {
+			coloured[i] = stripSGR(coloured[i])
+		}
+		if !slices.Equal(coloured, plain) {
+			t.Errorf("wrap(%q) coloured = %q, plain = %q", line, coloured, plain)
+		}
+	}
 }
 
 // A transcript prints message bodies and tool output exactly as they arrived,
@@ -289,8 +301,13 @@ func TestWrapForeignEscapes(t *testing.T) {
 func TestWidthInvariant(t *testing.T) {
 	d := zooDB(t)
 	cases := [][]string{
+		nil,
+		{"--tools", "full", "--reasoning", "--stats"},
+		{"--tools", "none"},
+		{"--color", "always", "--tools", "full", "--reasoning", "--stats"},
 		{"--list"},
 		{"--list", "--color", "always"},
+		{"--arg-width", "20", "--max-chars", "40", "--tools", "full"},
 	}
 	for _, width := range []int{60, 80, 100, 120, 200} {
 		for _, args := range cases {

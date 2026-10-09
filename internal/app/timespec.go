@@ -131,6 +131,12 @@ func atoi(s string) int {
 	return n
 }
 
+// stamp formats a millisecond timestamp as a full local date-time. It heads
+// every message, so a line lifted out of the transcript still says when it was.
+func stamp(ms int64) string {
+	return time.UnixMilli(ms).Format("2006-01-02 15:04:05")
+}
+
 // shortStamp is the session table's timestamp: stamp() with the seconds
 // dropped. The date is spelled out in full — a session table is read months
 // after the fact as often as minutes, and a bare 01-02 leaves the reader

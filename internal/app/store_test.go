@@ -127,10 +127,35 @@ func (d *testDB) summary(sid, usage string) {
 	}
 }
 
+// message appends a message row by the given agent, as docker-agent writes
+// them: agent_name is empty on user and system messages and names the agent on
+// assistant and tool ones. data is its message_json.
+func (d *testDB) message(sid, agent, data string) {
+	d.t.Helper()
+	if _, err := d.db.Exec(
+		`insert into session_items (session_id, position, item_type, agent_name, message_json)
+		   values (?, (select coalesce(max(position), -1) + 1 from session_items where session_id = ?), 'message', ?, ?)`,
+		sid, sid, agent, data); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
 // userText appends a user message holding only text.
 func (d *testDB) userText(sid, at, text string) {
 	d.t.Helper()
-	d.item(sid, "message", `{"role":"user","content":`+jsonStr(text)+`,"created_at":"`+at+`"}`)
+	d.message(sid, "", `{"role":"user","content":`+jsonStr(text)+`,"created_at":"`+at+`"}`)
+}
+
+// implicitUser appends a prompt docker-agent injected rather than the user
+// typed, such as the Please proceed. that opens a subagent.
+func (d *testDB) implicitUser(sid, at, text string) {
+	d.t.Helper()
+	if _, err := d.db.Exec(
+		`insert into session_items (session_id, position, item_type, agent_name, implicit, message_json)
+		   values (?, (select coalesce(max(position), -1) + 1 from session_items where session_id = ?), 'message', '', 1, ?)`,
+		sid, sid, `{"role":"user","content":`+jsonStr(text)+`,"created_at":"`+at+`"}`); err != nil {
+		d.t.Fatal(err)
+	}
 }
 
 func jsonStr(s string) string {
@@ -467,5 +492,39 @@ func TestMessageCounts(t *testing.T) {
 	}
 	if got["a"] != 4 || got["b"] != 0 {
 		t.Errorf("counts = %v, want a 4 and b 0", got)
+	}
+}
+
+// The agent behind an item and whether docker-agent injected it come back from
+// their columns: agent_name is NULL on an item that is not a message, and
+// implicit is 0 unless set.
+func TestItemsAgentAndImplicit(t *testing.T) {
+	d := newTestDB(t)
+	d.session("a", "", "", "/p", "2026-10-08T09:00:00+05:00")
+	d.message("a", "helper", `{"role":"assistant","content":"ok"}`)
+	d.userText("a", "2026-10-08T09:01:00+05:00", "typed")
+	d.implicitUser("a", "2026-10-08T09:01:00+05:00", "Please proceed.")
+	d.item("a", "error", `{"message":"boom"}`)
+	st := d.open(t)
+	ctx := context.Background()
+	rows, err := st.sessions(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.items(ctx, tagSessions(rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		agent    string
+		implicit bool
+	}{{"helper", false}, {"", false}, {"", true}, {"", false}}
+	if len(got) != len(want) {
+		t.Fatalf("items = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].agent != w.agent || got[i].implicit != w.implicit {
+			t.Errorf("item %d: agent %q, implicit %v; want %q, %v", i, got[i].agent, got[i].implicit, w.agent, w.implicit)
+		}
 	}
 }

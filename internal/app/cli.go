@@ -40,9 +40,14 @@ type options struct {
 	interval     float64
 	out          string
 
-	paint  Paint
-	width  int
-	stderr io.Writer
+	paint         Paint
+	width         int
+	stderr        io.Writer
+	warnedUnknown bool // the unknown-item warning is given once a run, --follow rounds included
+}
+
+func (o *options) warnf(format string, args ...any) {
+	_, _ = fmt.Fprintf(o.stderr, "warning: "+format+"\n", args...)
 }
 
 // enumFlag is a pflag.Value that only takes one of a fixed set of words.
@@ -324,7 +329,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	paint := opts.paint
 	var out []string
-	if opts.list {
+	switch {
+	case opts.list:
 		// The table's counts are of whole sessions, so they are asked for here
 		// rather than taken from what build() happened to render.
 		ids := make([]string, len(t.used))
@@ -336,6 +342,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		out = legend(t.used, opts.root, opts.width, true, counts, paint)
+	case len(t.lines) > 0:
+		out = wrap("", paint.paint(summaryLine(opts, len(t.used)), dim), opts.width)
+		out = append(out, "")
+		out = append(out, legend(t.used, opts.root, opts.width, false, nil, paint)...)
+		out = append(out, t.lines...)
 	}
 	// An empty result is an answer about the query, not transcript content:
 	// it goes to stderr, and the transcript's sink stays clean.
@@ -364,6 +375,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, "wrote %s\n", opts.out)
 	}
 	return nil
+}
+
+// summaryLine is the transcript's one-line header: what was asked for, over
+// what window, and how many sessions answered.
+func summaryLine(opts *options, used int) string {
+	name := "all projects"
+	if opts.root != "" {
+		name = filepath.Base(opts.root)
+	}
+	window := "all time"
+	if !opts.all {
+		end := "now"
+		if opts.until != nil {
+			end = stamp(*opts.until)
+		}
+		window = stamp(*opts.since) + " → " + end
+	}
+	return fmt.Sprintf("%s  %s  %d session(s)", name, window, used)
 }
 
 // writeLines buffers the lines out and reports the first write error, which

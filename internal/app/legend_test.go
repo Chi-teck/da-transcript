@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ func TestLegendWhereRelativeToRoot(t *testing.T) {
 }
 
 // The --list table ends on a foot rule and a line counting what is above it,
-// back to the earliest row's date.
+// back to the earliest row's date. The transcript's key gets neither.
 func TestLegendFooter(t *testing.T) {
 	d := zooDB(t)
 	t.Setenv("COLUMNS", "")
@@ -57,8 +58,16 @@ func TestLegendFooter(t *testing.T) {
 		t.Errorf("foot rule = %q, want the box closed off", foot)
 	}
 	// Indented to where the first column's text starts, not to the margin.
-	if got, want := lines[len(lines)-1], "  3 sessions since 2026-08-17"; got != want {
+	if got, want := lines[len(lines)-1], "  4 sessions since 2026-08-17"; got != want {
 		t.Errorf("footer = %q, want %q", got, want)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"--db", d.path, "--everywhere", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "sessions since") {
+		t.Error("the transcript's key grew a footer")
 	}
 }
 
@@ -141,14 +150,15 @@ func TestTally(t *testing.T) {
 	  "usage":{"input_tokens":30,"output_tokens":3}}`)
 	d.item("a", "mystery", `{"usage":{"input_tokens":9999}}`)
 	d.subsession("a", "kid")
-	d.item("kid", "message", `{"role":"assistant","finish_reason":"stop","created_at":"2026-10-08T09:02:40+05:00",
-	  "usage":{"input_tokens":7,"output_tokens":2}}`)
+	d.item("kid", "message", `{"role":"assistant","content":"ok","finish_reason":"stop",
+	  "created_at":"2026-10-08T09:02:40+05:00","usage":{"input_tokens":7,"output_tokens":2}}`)
 
-	d.item("zero", "message", `{"role":"assistant","finish_reason":"stop","created_at":"2026-10-08T09:00:01+05:00",
+	d.item("zero", "message", `{"role":"assistant","content":"ok","finish_reason":"stop",
+	  "created_at":"2026-10-08T09:00:01+05:00",
 	  "usage":{"input_tokens":0,"output_tokens":0,"cached_input_tokens":0,"cached_write_tokens":0}}`)
 	d.userText("none", "2026-10-08T09:00:02+05:00", "hi")
 
-	tr, err := build(context.Background(), d.open(t), &options{all: true})
+	tr, err := build(context.Background(), d.open(t), &options{all: true, stderr: io.Discard, width: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +184,7 @@ func TestTally(t *testing.T) {
 	}
 }
 
-// A session is listed when one of its items falls in the window, an item with
+// A session is listed when a block of its is drawn in the window, an item with
 // no time of its own counting at the time of the one before it. Its figures
 // describe the whole session whatever the window.
 func TestListWindow(t *testing.T) {

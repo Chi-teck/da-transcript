@@ -35,21 +35,32 @@ type itemData struct {
 	CreatedAt        flexString      `json:"created_at"`        // all but subsession and summary
 	Message          flexString      `json:"message"`           // error (and termination)
 	Code             flexString      `json:"code"`              // error
+	AgentName        flexString      `json:"agent_name"`        // error, evaluation: their agent_name column is NULL
+	Reason           flexString      `json:"reason"`            // termination
 }
 
-// messagePart is one multi_content entry: text, document, image_url, or a type
-// kept by name. image_url.url is a data: URL and is not declared, so it is
-// never decoded.
+// messagePart is one multi_content entry: text, document, the legacy
+// image_url and file, or a type kept by name. image_url.url is a data: URL and
+// is not declared, so it is never decoded.
 type messagePart struct {
 	Type     flexString    `json:"type"`
 	Text     flexString    `json:"text"`
 	Document *partDocument `json:"document"`
+	File     *partFile     `json:"file"`
 }
 
 // partDocument is an attachment. Its bytes sit in source.inline_data as
 // base64; that is not declared either.
 type partDocument struct {
 	Name     flexString `json:"name"`
+	MimeType flexString `json:"mime_type"`
+}
+
+// partFile is an attachment as docker-agent wrote it before v1.55, by path,
+// which a store upgraded since still holds. Images of that age are image_url
+// parts instead, with no name at all.
+type partFile struct {
+	Path     flexString `json:"path"`
 	MimeType flexString `json:"mime_type"`
 }
 
@@ -145,6 +156,30 @@ func decodeItem(r *itemRow, message, usage []byte) {
 			r.unknown = cmp.Or(r.typ, "item (no type)")
 		}
 	}
+}
+
+// errorText renders an error item, stored as {message, code}, as
+// "<code>: <message>", or whichever of the two it has. One with neither is
+// "?": an error is never drawn as a bare label.
+func errorText(code, message string) string {
+	switch {
+	case code != "" && message != "":
+		return code + ": " + message
+	case code != "" || message != "":
+		return code + message
+	}
+	return "?"
+}
+
+// numberText is what an f-string prints for a JSON number: the literal for an
+// int, the same for a float (whose repr is its shortest round-trip form, which
+// is how the store spelled it). Anything that is not a number prints as dflt.
+func numberText(raw json.RawMessage, dflt string) string {
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err != nil || n == "" {
+		return dflt
+	}
+	return string(n)
 }
 
 func numberValue(raw json.RawMessage) (float64, bool) {

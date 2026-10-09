@@ -327,11 +327,22 @@ func wrap(prefix, text string, width int) []string {
 	return out
 }
 
+// trimEnd drops a line's trailing spaces, the ones a colour span closes over
+// included: a painted line ends in a reset, and a plain TrimRight stops there
+// and keeps a space the uncoloured line does not have.
+func trimEnd(s string) string {
+	s = strings.TrimRight(s, " ")
+	if rest, ok := strings.CutSuffix(s, reset); ok {
+		return trimEnd(rest) + reset
+	}
+	return s
+}
+
 // wrapLine wraps one newline-free line into pieces of at most room cells,
 // breaking at spaces where it can and mid-word where it must.
 func wrapLine(prefix, line string, room int) []string {
 	if visibleCells(line) <= room {
-		return []string{strings.TrimRight(prefix+line, " ")}
+		return []string{trimEnd(prefix + line)}
 	}
 	var out []string
 	emit := func(open, content, closing string) {
@@ -339,7 +350,7 @@ func wrapLine(prefix, line string, room int) []string {
 		if content != "" {
 			content = open + content + closing
 		}
-		out = append(out, strings.TrimRight(prefix+content, " "))
+		out = append(out, trimEnd(prefix+content))
 	}
 	var cur []byte
 	curW := 0

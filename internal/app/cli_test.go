@@ -206,10 +206,12 @@ func TestRunEmptyMessages(t *testing.T) {
 		"Nothing from 1 session(s) in this window") {
 		t.Errorf("empty list: %q", got)
 	}
-	// With --all the hint would be useless, so it goes — here the one session
-	// in scope has no items, so no window holds anything of it.
+	// With --all the hint would be useless, so it goes — here everything in
+	// scope is a model step with no content, which renders nothing.
 	d2 := newTestDB(t)
 	d2.session("b", "", "t", "/p", "2026-08-17T10:00:00Z")
+	d2.message("b", "root", `{"role":"assistant","content":"","finish_reason":"stop",
+	  "created_at":"2026-08-17T10:00:00Z"}`)
 	var so, se bytes.Buffer
 	if err := run([]string{"--db", d2.path, "--everywhere", "--all"}, &so, &se); err != nil {
 		t.Fatal(err)
@@ -218,18 +220,27 @@ func TestRunEmptyMessages(t *testing.T) {
 		strings.Contains(se.String(), "try --all") {
 		t.Errorf("--all drops the hint: %q", se.String())
 	}
+	// --list rows are the sessions the transcript would show, so a session
+	// with an item in the window but no block drawn there is not one of them.
+	so.Reset()
+	se.Reset()
+	if err := run([]string{"--db", d2.path, "--everywhere", "--all", "--list"}, &so, &se); err != nil {
+		t.Fatal(err)
+	}
+	if so.Len() != 0 || !strings.Contains(se.String(), "Nothing from 1 session(s) in this window.\n") {
+		t.Errorf("--list with nothing drawn: stdout %q, stderr %q", so.String(), se.String())
+	}
 }
 
 func TestRunWritesFile(t *testing.T) {
 	t.Setenv("COLUMNS", "")
 	d := newTestDB(t)
-	d.session("a", "", "hello file", "/p", "2026-08-17T10:00:00Z")
+	d.session("a", "", "t", "/p", "2026-08-17T10:00:00Z")
 	d.userText("a", "2026-08-17T10:00:00Z", "hello file")
 
 	path := filepath.Join(t.TempDir(), "out.md")
 	var stdout, stderr bytes.Buffer
-	// The --list table, until there is a transcript to write.
-	if err := run([]string{"--db", d.path, "--everywhere", "--all", "--list", "-o", path}, &stdout, &stderr); err != nil {
+	if err := run([]string{"--db", d.path, "--everywhere", "--all", "-o", path}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if stdout.Len() != 0 {

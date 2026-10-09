@@ -1,0 +1,202 @@
+[38;5;240mall projects  all time  4 session(s)[0m
+
+[1;38;5;231mSession[0m  [1;38;5;231mStarted[0m           [1;38;5;231mWhere[0m      [1;38;5;231mTitle[0m
+zoo001   2026-08-17 10:00  /proj      Zoo main
+zoo002   2026-08-17 10:00  /proj/sub  (untitled)
+zoo003↓  2026-08-17 10:03  /proj      Transferred task
+zoo004↓  2026-08-17 10:05  /proj      Background agent task
+
+
+ [1;38;5;183m⚑ ❬zoo001❭[0m [38;5;225mZoo main[0m                                   [38;5;183m/proj[0m
+[38;5;183m────────────────────────────────────────────────────────────[0m
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-17 10:01:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m [chat | user=x]
+  [38;5;117m│[0m hello world
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:02:00 • assistant • glm-5.3[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m I will run tools.
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-17 10:03:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m @/proj/shot.png see attached
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mshot.png[0m [38;5;240m(image/png)[0m
+
+
+ [1;38;5;183m⚑ ❬zoo003↓❭[0m [38;5;225mTransferred task[0m                          [38;5;183m/proj[0m
+[38;5;183m┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈[0m
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:03:30 • system[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m You are a member of a team of agents. Your goal is to
+  [38;5;244m│[0m complete the following task:
+  [38;5;244m│[0m
+  [38;5;244m│[0m <task>
+  [38;5;244m│[0m do the subtask
+  [38;5;244m│[0m </task>
+  [38;5;244m│[0m
+  [38;5;244m│[0m <expected_output>
+  [38;5;244m│[0m done
+  [38;5;244m│[0m </expected_output>
+  [38;5;244m│[0m
+  [38;5;244m│[0m The user attached these files in the original
+  [38;5;244m│[0m conversation. They are available for you to read at
+  [38;5;244m│[0m these absolute paths; prefer them over any bare
+  [38;5;244m│[0m filenames mentioned in <task>:
+  [38;5;244m│[0m <attached_files>
+  [38;5;244m│[0m - /proj/shot.png
+  [38;5;244m│[0m </attached_files>
+  [38;5;244m│[0m
+  [38;5;244m│[0m If the task references files, treat any absolute paths
+  [38;5;244m│[0m in <task> as authoritative and use them as-is. If a
+  [38;5;244m│[0m referenced file is given by name only (e.g. "foo.go"),
+  [38;5;244m│[0m do not guess: search the workspace or ask the calling
+  [38;5;244m│[0m agent for the absolute path before reading or modifying
+  [38;5;244m│[0m the file.
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:03:30 • user • implicit[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m Please proceed.
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:04:50 • assistant • glm-5.3 @helper[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m done: the subtask is finished
+
+
+ [1;38;5;183m⚑ ❬zoo004↓❭[0m [38;5;225mBackground agent task[0m                     [38;5;183m/proj[0m
+[38;5;183m┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈[0m
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:05:30 • system[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m You are a member of a team of agents. Your goal is to
+  [38;5;244m│[0m complete the following task:
+  [38;5;244m│[0m
+  [38;5;244m│[0m <task>
+  [38;5;244m│[0m sleep 20
+  [38;5;244m│[0m </task>
+  [38;5;244m│[0m
+  [38;5;244m│[0m The user attached these files in the original
+  [38;5;244m│[0m conversation. They are available for you to read at
+  [38;5;244m│[0m these absolute paths; prefer them over any bare
+  [38;5;244m│[0m filenames mentioned in <task>:
+  [38;5;244m│[0m <attached_files>
+  [38;5;244m│[0m - /proj/shot.png
+  [38;5;244m│[0m </attached_files>
+  [38;5;244m│[0m
+  [38;5;244m│[0m If the task references files, treat any absolute paths
+  [38;5;244m│[0m in <task> as authoritative and use them as-is. If a
+  [38;5;244m│[0m referenced file is given by name only (e.g. "foo.go"),
+  [38;5;244m│[0m do not guess: search the workspace or ask the calling
+  [38;5;244m│[0m agent for the absolute path before reading or modifying
+  [38;5;244m│[0m the file.
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:05:30 • user • implicit[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m Please proceed.
+
+
+ [1;38;5;183m↻ ❬zoo001❭[0m [38;5;225mZoo main[0m                                   [38;5;183m/proj[0m
+[38;5;183m────────────────────────────────────────────────────────────[0m
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:06:00 • assistant • glm-5.3[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m Waiting for the background agent.
+
+
+ [1;38;5;183m↻ ❬zoo004↓❭[0m [38;5;225mBackground agent task[0m                     [38;5;183m/proj[0m
+[38;5;183m┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈[0m
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:06:10 • assistant • glm-5.3 @helper[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m slept
+
+
+ [1;38;5;183m↻ ❬zoo001❭[0m [38;5;225mZoo main[0m                                   [38;5;183m/proj[0m
+[38;5;183m────────────────────────────────────────────────────────────[0m
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-17 10:06:35 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m also check the logs
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:06:35 • assistant • unfinished[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m partial answer
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:07:00 • compaction[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m [38;5;240mcontext compacted[0m
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-17 10:08:30 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m try again
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:09:00 • assistant • ERROR[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m   [38;5;203merror[0m [38;5;250mmodel_error: model failed: HTTP 400[0m
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:09:00 • mystery[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m [38;5;240mnot shown: unknown to this version of da-transcript[0m
+
+
+ [1;38;5;183m⚑ ❬zoo002❭[0m [38;5;225m(untitled)[0m                             [38;5;183m/proj/sub[0m
+[38;5;183m────────────────────────────────────────────────────────────[0m
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-18 09:30:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m 日本語のコマンド 🎌 とても長い行
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-18 09:31:00 • assistant • glm-5.3-flash @viewer[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m ok
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-18 09:35:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m compare these
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250m?[0m [38;5;240m(image)[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mspec.pdf[0m [38;5;240m(application/pdf)[0m
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-18 09:36:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m @/proj/main.go @/proj/diagram.png explain these
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mmain.go[0m [38;5;240m(?)[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mnotes.txt[0m [38;5;240m(?)[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mdiagram.png[0m [38;5;240m(image/jpeg)[0m
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-18 09:37:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;240mnot shown: binary data (58 bytes)[0m
+
+
+  [38;5;117m│[0m [4;38;5;117m2026-08-18 09:40:00 • user[0m
+  [38;5;117m│[0m
+  [38;5;117m│[0m ⏰ Scheduled task "nightly" (sched-1) is due: run the
+  [38;5;117m│[0m report
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-18 09:40:00 • termination[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m [38;5;240mrun budget exceeded: $0.51 of $0.50[0m
+
