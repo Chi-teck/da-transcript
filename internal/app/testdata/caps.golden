@@ -1,0 +1,422 @@
+all projects  all time  4 session(s)
+
+Session  Started           Where      Title
+zoo001   2026-08-17 10:00  /proj      Zoo main
+zoo002   2026-08-17 10:00  /proj/sub  (untitled)
+zoo003↓  2026-08-17 10:03  /proj      Transferred task
+zoo004↓  2026-08-17 10:05  /proj      Background agent task
+
+
+ ⚑ ❬zoo001❭ Zoo main                                                                           /proj
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:01:00 • user
+  │
+  │ [chat | user=x]
+  │ hello world
+
+
+  │ 2026-08-17 10:02:00 • assistant • glm-5.3
+  │
+  │ I will run tools.
+  │
+  │ shell echo hi                                                                        ok       0s
+  │   in
+  │     {
+  │       "cmd": "echo hi"
+  │     }
+  │   out hi
+  │ shell ls /nope                                                                      ERR       1s
+  │   in
+  │     {
+  │       "cmd": "ls /nope"
+  │     }
+  │   err
+  │     Error executing command: exit status 2
+  │     O
+  │     … [59 more chars]
+  │ shell uname                                                                         ERR       9s
+  │   in
+  │     {
+  │       "cmd": "uname"
+  │     }
+  │   err The user rejected the tool call.
+  │ read_file /proj/logo.png                                                             ok      10s
+  │   in
+  │     {
+  │       "path": "/proj/logo.png"
+  │     }
+  │   out
+  │     Read image file /proj/logo.png [image/pn
+  │     … [29 more chars]
+
+
+  │ 2026-08-17 10:03:00 • user
+  │
+  │ @/proj/shot.png see attached
+  │
+  │ attachment shot.png (image/png)
+
+
+  │ 2026-08-17 10:03:30 • assistant • glm-5.3
+  │
+  │ transfer_task do the subtask                                                         ok      90s
+  │   in
+  │     {
+  │       "agent": "helper",
+  │       "task": "do the
+  │     … [40 more chars]
+  │   out done: the subtask is finished
+
+
+  │ 2026-08-17 10:03:30 • subagent
+  │
+  │ session ❬zoo003↓❭
+
+
+ ⚑ ❬zoo003↓❭ Transferred task                                                                  /proj
+┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+  │ 2026-08-17 10:03:30 • system
+  │
+  │ You are a member of a team of agents. Your goal is to complete the following task:
+  │
+  │ <task>
+  │ do the subtask
+  │ </task>
+  │
+  │ <expected_output>
+  │ done
+  │ </expected_output>
+  │
+  │ The user attached these files in the original conversation. They are available for you to read
+  │ at these absolute paths; prefer them over any bare filenames mentioned in <task>:
+  │ <attached_files>
+  │ - /proj/shot.png
+  │ </attached_files>
+  │
+  │ If the task references files, treat any absolute paths in <task> as authoritative and use them
+  │ as-is. If a referenced file is given by name only (e.g. "foo.go"), do not guess: search the
+  │ workspace or ask the calling agent for the absolute path before reading or modifying the file.
+
+
+  │ 2026-08-17 10:03:30 • user • implicit
+  │
+  │ Please proceed.
+
+
+  │ 2026-08-17 10:04:00 • assistant • glm-5.3 @helper
+  │
+  │ shell sleep 20                                                                       ok      20s
+  │   in
+  │     {
+  │       "cmd": "sleep 20"
+  │     }
+  │   out <no output>
+
+
+  │ 2026-08-17 10:04:50 • assistant • glm-5.3 @helper
+  │
+  │ done: the subtask is finished
+
+
+ ↻ ❬zoo001❭ Zoo main                                                                           /proj
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:05:30 • assistant • glm-5.3
+  │
+  │ run_background_agent sleep 20                                                        ok       0s
+  │   in
+  │     {
+  │       "agent": "helper",
+  │       "task": "sleep
+  │     … [5 more chars]
+  │   out
+  │     Background agent task started with ID: a
+  │     … [40 more chars]
+
+
+ ⚑ ❬zoo004↓❭ Background agent task                                                             /proj
+┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+  │ 2026-08-17 10:05:30 • system
+  │
+  │ You are a member of a team of agents. Your goal is to complete the following task:
+  │
+  │ <task>
+  │ sleep 20
+  │ </task>
+  │
+  │ The user attached these files in the original conversation. They are available for you to read
+  │ at these absolute paths; prefer them over any bare filenames mentioned in <task>:
+  │ <attached_files>
+  │ - /proj/shot.png
+  │ </attached_files>
+  │
+  │ If the task references files, treat any absolute paths in <task> as authoritative and use them
+  │ as-is. If a referenced file is given by name only (e.g. "foo.go"), do not guess: search the
+  │ workspace or ask the calling agent for the absolute path before reading or modifying the file.
+
+
+  │ 2026-08-17 10:05:30 • user • implicit
+  │
+  │ Please proceed.
+
+
+ ↻ ❬zoo001❭ Zoo main                                                                           /proj
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:06:00 • assistant • glm-5.3
+  │
+  │ Waiting for the background agent.
+  │
+  │ shell date                                                                           ok       1s
+  │   in
+  │     {
+  │       "cmd": "date"
+  │     }
+  │   out Mon Aug 17 10:06:01 UTC 2026
+
+
+  │ 2026-08-17 10:06:01 • subagent
+  │
+  │ session ❬zoo004↓❭
+
+
+ ↻ ❬zoo004↓❭ Background agent task                                                             /proj
+┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+  │ 2026-08-17 10:06:10 • assistant • glm-5.3 @helper
+  │
+  │ slept
+
+
+ ↻ ❬zoo001❭ Zoo main                                                                           /proj
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:06:30 • assistant • glm-5.3
+  │
+  │ wait_background_agents ["agent_task_1"]                                              ok       0s
+  │   in
+  │     {
+  │       "task_ids": [
+  │         "agent_task_1"
+  │       ]
+  │     … [2 more chars]
+  │   task agent_task_1 completed
+  │   result slept
+
+
+  │ 2026-08-17 10:06:35 • user
+  │
+  │ also check the logs
+
+
+  │ 2026-08-17 10:06:35 • assistant • unfinished
+  │
+  │ partial answer
+
+
+  │ 2026-08-17 10:07:00 • assistant • glm-5.3
+  │
+  │ shell sleep 20                                                                         no result
+  │   in
+  │     {
+  │       "cmd": "sleep 20"
+  │     }
+
+
+  │ 2026-08-17 10:07:00 • compaction
+  │
+  │ context compacted
+
+
+  │ 2026-08-17 10:08:30 • user
+  │
+  │ try again
+
+
+  │ 2026-08-17 10:09:00 • assistant • ERROR
+  │
+  │   error model_error: model failed: HTTP 400
+
+
+  │ 2026-08-17 10:09:00 • mystery
+  │
+  │ not shown: unknown to this version of da-transcript
+
+
+  │ 2026-08-17 10:09:40 • tool
+  │
+  │ ?                                                                                    ok
+  │   out stray result
+
+
+ ⚑ ❬zoo002❭ (untitled)                                                                     /proj/sub
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-18 09:30:00 • user
+  │
+  │ 日本語のコマンド 🎌 とても長い行
+
+
+  │ 2026-08-18 09:31:00 • assistant • glm-5.3-flash @viewer
+  │
+  │ ok
+
+
+  │ 2026-08-18 09:32:00 • assistant • glm-5.3-flash @viewer
+  │
+  │ shell echo 日本語のコマン…                                                           ok       0s
+  │   in
+  │     {
+  │       "cmd": "echo 日本語のコマンド 🎌 とても長い行 もっと長く
+  │     … [15 more chars]
+  │   out 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く
+  │ shell cat build.log                                                                  ok       1s
+  │   in
+  │     {
+  │       "cmd": "cat build.log",
+  │       "cwd": "/p
+  │     … [10 more chars]
+  │   out
+  │     building
+  │     see run 7 for the log
+  │     progress
+  │     … [41 more chars]
+  │ shell nohup ./server &                                                               ok       1s
+  │   in
+  │     {
+  │       "cmd": "nohup ./server &"
+  │     }
+  │   out
+  │     Error executing command: exec: WaitDelay
+  │     … [53 more chars]
+  │ shell dir && echo done                                                              ERR       2s
+  │   in
+  │     {
+  │       "cmd": "dir && echo done"
+  │     }
+  │   err
+  │     [shell-hint] You are on Windows PowerShe
+  │     … [198 more chars]
+  │ shell make test                                                                     ERR      30s
+  │   in
+  │     {
+  │       "cmd": "make test",
+  │       "timeout": 30
+  │
+  │     … [1 more chars]
+  │   err
+  │     Command timed out after 30s
+  │     Output: runn
+  │     … [12 more chars]
+  │ shell ls -la /proj                                                                  ERR       2s
+  │   in ls -la /proj
+  │   err
+  │     Error calling tool: invalid character 'l
+  │     … [32 more chars]
+  │ search_files_content TODO                                                            ok       2s
+  │   in
+  │     {
+  │       "path": "/proj",
+  │       "query": "TODO",
+  │
+  │     … [21 more chars]
+  │   out /proj/main.go:3: // TODO
+  │ write_file /proj/notes.md                                                            ok       3s
+  │   in
+  │     {
+  │       "path": "/proj/notes.md",
+  │       "content
+  │     … [148 more chars]
+  │   out
+  │     File written successfully: /proj/notes.m
+  │     … [13 more chars]
+  │ list_background_jobs                                                                 ok       3s
+  │   out
+  │     Background Jobs:
+  │
+  │     No background jobs fou
+  │     … [3 more chars]
+  │ directory_tree / [output truncated]                                                  ok       4s
+  │   in
+  │     {
+  │       "path": "/"
+  │     }
+  │   out
+  │     Tool call result was too large (219138 b
+  │     … [225 more chars]
+  │ get_document {"doc_id":"42"}                                                         ok       5s
+  │   in
+  │     {
+  │       "doc_id": "42"
+  │     }
+  │   out
+  │     Fetched spec.pdf
+  │     file (application/pdf)
+  │ fetch ["https://example.c…                                                           ok       6s
+  │   in
+  │     {
+  │       "urls": [
+  │         "https://example.com"
+  │
+  │     … [29 more chars]
+  │   out
+  │     # Example Domain
+  │
+  │     This domain is for use
+  │     … [39 more chars]
+  │ wait_background_agents ["agent_task_2","ag…                                          ok      20s
+  │   in
+  │     {
+  │       "task_ids": [
+  │         "agent_task_2",
+  │
+  │     … [39 more chars]
+  │   task agent_task_2 failed
+  │   err model failed: HTTP 429
+  │   task agent_task_3 running [output truncated]
+  │   result step 1 of 3 done
+  │ shell sleep 60                                                                      ERR      10s
+  │   in
+  │     {
+  │       "cmd": "sleep 60"
+  │     }
+  │   err The tool call was canceled by the user.
+
+
+  │ 2026-08-18 09:35:00 • user
+  │
+  │ compare these
+  │
+  │ attachment ? (image)
+  │
+  │ attachment spec.pdf (application/pdf)
+
+
+  │ 2026-08-18 09:36:00 • user
+  │
+  │ @/proj/main.go @/proj/diagram.png explain these
+  │
+  │ attachment main.go (?)
+  │
+  │ attachment notes.txt (?)
+  │
+  │ attachment diagram.png (image/jpeg)
+
+
+  │ 2026-08-18 09:37:00 • user
+  │
+  │ not shown: binary data (58 bytes)
+
+
+  │ 2026-08-18 09:40:00 • user
+  │
+  │ ⏰ Scheduled task "nightly" (sched-1) is due: run the report
+
+
+  │ 2026-08-18 09:40:00 • termination
+  │
+  │ run budget exceeded: $0.51 of $0.50
+

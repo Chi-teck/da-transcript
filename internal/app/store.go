@@ -50,6 +50,7 @@ type itemRow struct {
 	typ         string   // item_type
 	agent       string   // agent_name: the agent behind a message; "" on user and system messages and on every other item
 	implicit    bool     // a prompt docker-agent injected rather than one the user typed
+	subsession  string   // subsession_id: the child a subsession row folds back in; "" once the child is deleted
 	data        itemData // message_json decoded (payload.go); a summary's usage_json lands in data.Usage
 	unknown     string   // non-empty when this version cannot read the item: what to call it
 	timeCreated int64    // epoch ms: its own created_at, else the previous item's, else its session's start
@@ -225,14 +226,14 @@ func (s *store) items(ctx context.Context, sessions []*session) ([]itemRow, erro
 	var prev int64
 	for chunk := range slices.Chunk(ids, chunkSize) {
 		query := "select id, session_id, position, item_type, coalesce(agent_name, ''), coalesce(implicit, 0)," +
-			" message_json, usage_json from session_items" +
+			" coalesce(subsession_id, ''), message_json, usage_json from session_items" +
 			" where session_id in (" + placeholders(len(chunk)) + ") order by session_id, position"
 		rows, err := s.db.QueryContext(ctx, query, anySlice(chunk)...)
 		err = scanAll(rows, err, func(rows *sql.Rows) error {
 			var r itemRow
 			var message, usage []byte
 			if err := rows.Scan(&r.id, &r.sessionID, &r.position, &r.typ, &r.agent, &r.implicit,
-				&message, &usage); err != nil {
+				&r.subsession, &message, &usage); err != nil {
 				return err
 			}
 			decodeItem(&r, message, usage)

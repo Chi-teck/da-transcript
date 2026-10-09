@@ -201,7 +201,7 @@ func build(ctx context.Context, st *store, opts *options) (*transcript, error) {
 		// One warning a run, at the first item drawn that this version could
 		// not read; the placeholders say the rest.
 		if b.head.unknown != "" && !opts.warnedUnknown {
-			opts.warnf("some items are unknown to this version (first: %s in %s)", b.head.unknown, s.tag)
+			opts.warnf("some items are unknown to this version (first: %s in %s)", neutralise(b.head.unknown), s.tag)
 			opts.warnedUnknown = true
 		}
 		if !usedSet[s.id] {

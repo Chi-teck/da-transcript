@@ -2,10 +2,13 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,9 +19,9 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // days, one shape of docker-agent's store after another.
 //
 // zoo001 is the main session. Its first step reasons, writes and makes four
-// calls — a shell call that works, one that fails without saying so, one the
-// user rejected and an image read — and the prompt after it carries an
-// attachment. Then a transfer_task, whose result arrives after the subagent's
+// calls — a shell call that works, one that fails without docker-agent marking
+// it, one the user rejected and an image read — and the prompt after it
+// carries an attachment. Then a transfer_task, whose result arrives after the subagent's
 // whole run, past its subsession row; a background agent, whose subsession row
 // lands while the parent waits for its next step, before the call that waits
 // for it; a prompt steered into the running turn; a step cut off mid-stream; a
@@ -26,10 +29,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // version does not know; an evaluator's call; and a result no call answers.
 //
 // zoo002 is a second project, its turns on day two: a CJK prompt, a step by an
-// agent other than root, a prompt from before docker-agent v1.55 with its
-// attachments in the old shapes, a prompt whose text files are inlined into
-// its text part, a prompt that is an image's bytes, a scheduler's prompt and a
-// termination.
+// agent other than root, a step making every tool call the rest of the zoo
+// does not, a prompt from before docker-agent v1.55 with its attachments in
+// the old shapes, a prompt whose text files are inlined into its text part, a
+// prompt that is an image's bytes, a scheduler's prompt and a termination.
 //
 // zoo003 and zoo004 are the two subagents, the transfer_task's and the
 // background one's, each opened by its task and an implicit prompt. zoo004
@@ -163,6 +166,67 @@ func zooDB(t *testing.T) *testDB {
 	d.message(zoo2, "viewer", `{"role":"assistant","created_at":"2026-08-18T09:31:00Z","content":"ok",
 	  "model":"zai/glm-5.3-flash","finish_reason":"stop",
 	  "usage":{"input_tokens":900,"output_tokens":120,"cached_input_tokens":0,"cached_write_tokens":0}}`)
+	// The tool shapes the steps above lack: a CJK summary; output full of what
+	// a terminal would act on; the shell's failures, and the one that is not;
+	// arguments that are not JSON; a key that beats another; long arguments,
+	// and none; docker-agent's notice for an oversized result; an MCP tool's
+	// document; an array argument; a wait that timed out on one task and found
+	// another failed; and a call cancelled while it ran. Two shortcuts: that
+	// last result is only ever stored inside a subagent, and the wait's tasks
+	// have no sessions here; neither changes how a line is drawn. The results
+	// land in the order the calls finished.
+	d.message(zoo2, "viewer", `{"role":"assistant","message_id":"v1","created_at":"2026-08-18T09:32:00Z",
+	  "tool_calls":[`+strings.Join([]string{
+		call("call_v1", "shell", `{"cmd":"echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く"}`),
+		call("call_v2", "shell", `{"cmd":"cat build.log","cwd":"/proj/sub"}`),
+		call("call_v3", "shell", `{"cmd":"nohup ./server &"}`),
+		call("call_v4", "shell", `{"cmd":"dir && echo done"}`),
+		call("call_v5", "shell", `{"cmd":"make test","timeout":30}`),
+		call("call_v6", "shell", `ls -la /proj`),
+		call("call_v7", "search_files_content", `{"path":"/proj","query":"TODO","is_regex":false}`),
+		call("call_v8", "write_file", `{"path":"/proj/notes.md","content":"# Notes\n\nThe build runs on every push and takes`+
+			` about four minutes.\nThe slow part is the integration suite; run it locally with make test."}`),
+		call("call_v9", "list_background_jobs", `{}`),
+		call("call_v10", "directory_tree", `{"path":"/"}`),
+		call("call_v11", "get_document", `{"doc_id":"42"}`),
+		call("call_v12", "fetch", `{"urls":["https://example.com"],"format":"markdown"}`),
+		call("call_v13", "wait_background_agents", `{"task_ids":["agent_task_2","agent_task_3"],"timeout":20}`),
+		call("call_v14", "shell", `{"cmd":"sleep 60"}`),
+	}, ",")+`],
+	  "model":"zai/glm-5.3-flash","finish_reason":"tool_calls",`+spent+`}`)
+	result(zoo2, "viewer", "call_v1", "2026-08-18T09:32:00Z", "日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く")
+	// A screen clear, CRLF line ends, a hyperlink, a progress line redrawn
+	// with bare CRs, a colour, a bell, a NUL and a lone ESC.
+	result(zoo2, "viewer", "call_v2", "2026-08-18T09:32:01Z",
+		"\x1b[2Jbuilding\r\nsee \x1b]8;;https://ci.example/run/7\x1b\\run 7\x1b]8;;\x1b\\ for the log\r\n"+
+			"progress 10%\r50%\r100%\r\ntest_a \x1b[31mFAIL\x1b[0m\x07\r\nnul:\x00 esc:\x1b end\r\n")
+	// Exited 0, but left a child holding its output open.
+	result(zoo2, "viewer", "call_v3", "2026-08-18T09:32:01Z",
+		"Error executing command: exec: WaitDelay expired before I/O complete\nOutput: started pid 4242")
+	result(zoo2, "viewer", "call_v4", "2026-08-18T09:32:02Z",
+		"[shell-hint] You are on Windows PowerShell 5.1: chain commands with `;`, not `&&` or `||`."+
+			" Retry with the corrected syntax.\n\nError executing command: exit status 1\n"+
+			"Output: The token '&&' is not a valid statement separator in this version.")
+	d.message(zoo2, "viewer", `{"role":"tool","tool_call_id":"call_v6","is_error":true,"created_at":"2026-08-18T09:32:02Z",
+	  "content":"Error calling tool: invalid character 'l' looking for beginning of value"}`)
+	result(zoo2, "viewer", "call_v7", "2026-08-18T09:32:02Z", "/proj/main.go:3: // TODO")
+	result(zoo2, "viewer", "call_v8", "2026-08-18T09:32:03Z", "File written successfully: /proj/notes.md (138 bytes)")
+	result(zoo2, "viewer", "call_v9", "2026-08-18T09:32:03Z", "Background Jobs:\n\nNo background jobs found.\n")
+	result(zoo2, "viewer", "call_v10", "2026-08-18T09:32:04Z",
+		"Tool call result was too large (219138 bytes; limit 51200 bytes). The full result is available in a file:"+
+			" /tmp/docker-agent-tool-results/7d4a9c1e/tool-result-1.txt\n\n"+
+			"Showing the last 3 lines (up to 51200 bytes):\n\n/usr/share/zoneinfo/UTC\n/usr/share/zoneinfo/Zulu\n/var")
+	d.message(zoo2, "viewer", `{"role":"tool","tool_call_id":"call_v11","content":"Fetched spec.pdf","created_at":"2026-08-18T09:32:05Z",
+	  "multi_content":[{"type":"text","text":"Fetched spec.pdf"},
+	    {"type":"document","document":{"name":"spec.pdf","mime_type":"application/pdf","size":150000,
+	                                   "source":{"inline_data":"`+image+`"}}}]}`)
+	result(zoo2, "viewer", "call_v12", "2026-08-18T09:32:06Z",
+		"# Example Domain\n\nThis domain is for use in illustrative examples in documents.")
+	result(zoo2, "viewer", "call_v14", "2026-08-18T09:32:10Z", "The tool call was canceled by the user.")
+	result(zoo2, "viewer", "call_v13", "2026-08-18T09:32:20Z", `{"all_done":false,"timed_out":true,"tasks":[`+
+		`{"task_id":"agent_task_2","status":"failed","done":true,"error":"model failed: HTTP 429"},`+
+		`{"task_id":"agent_task_3","status":"running","done":false,"output":"step 1 of 3 done","truncated":true}]}`)
+	result(zoo2, "viewer", "call_v5", "2026-08-18T09:32:30Z", "Command timed out after 30s\nOutput: running 12 tests")
 	// Written before v1.55: an image as a nameless data: URL, a file by path.
 	d.message(zoo2, "", `{"role":"user","content":"compare these","created_at":"2026-08-18T09:35:00Z",
 	  "multi_content":[{"type":"text","text":"compare these"},
@@ -297,9 +361,12 @@ func TestRenderGolden(t *testing.T) {
 		columns string
 		args    []string
 	}{
+		{"compact", "", nil},
+		{"full", "", []string{"--tools", "full", "--reasoning", "--stats"}},
 		{"none", "", []string{"--tools", "none"}},
 		{"color", "", []string{"--color", "always", "--tools", "full", "--reasoning", "--stats"}},
 		{"list", "", []string{"--list"}},
+		{"caps", "", []string{"--arg-width", "20", "--max-chars", "40", "--tools", "full"}},
 		// A terminal too narrow for the content, which is the only way to fix
 		// what wrapping actually produces: every other golden renders at 100,
 		// where nothing has to fold. The coloured twin is the one that matters
@@ -315,7 +382,33 @@ func TestRenderGolden(t *testing.T) {
 			if strings.Contains(out, "data:image") || strings.Contains(out, "QUJD") {
 				t.Error("a data: URI reached the output")
 			}
+			// Nothing from the store reaches the terminal raw: the only
+			// escapes are the colour this program wrote.
+			if plain := stripSGR(out); strings.ContainsAny(plain, "\x1b\x00") {
+				t.Errorf("a raw ESC or NUL reached the output: %q", plain)
+			}
 		})
+	}
+}
+
+// A call's line is marked [output truncated] when docker-agent swapped its
+// result for the notice it writes for an oversized one, and a background
+// agent's task line when the wait cut its output; nothing else is. Under
+// --tools full the notice is the output, and says where the whole of it went.
+func TestRenderTruncationMarks(t *testing.T) {
+	d := zooDB(t)
+	compact := runArgs(t, d, "")
+	if n := strings.Count(compact, "[output truncated]"); n != 2 {
+		t.Errorf("compact mode marks %d lines, want 2:\n%s", n, compact)
+	}
+	for _, want := range []string{"directory_tree / [output truncated]", "task agent_task_3 running [output truncated]"} {
+		if !strings.Contains(compact, want) {
+			t.Errorf("compact mode lacks %q", want)
+		}
+	}
+	full := runArgs(t, d, "", "--tools", "full", "--reasoning", "--stats")
+	if !strings.Contains(full, "available in a file: /tmp/docker-agent-tool-results/") {
+		t.Error("full mode should print the notice naming the file")
 	}
 }
 
@@ -424,6 +517,178 @@ func TestSessionBannerWhere(t *testing.T) {
 	}
 	if line := sessionBanner(narrow, newFlag, paint, 30)[0]; strings.Contains(line, "…") && strings.Contains(line, "sub") {
 		t.Errorf("banner = %q, want the path dropped at this width", line)
+	}
+}
+
+func TestOneLineAndSummary(t *testing.T) {
+	if got := oneLineText("  a\t b\n c  ", 100); got != "a b c" {
+		t.Errorf("whitespace collapse: %q", got)
+	}
+	if got := oneLineText("abcdef", 4); got != "abc…" {
+		t.Errorf("cut: %q", got)
+	}
+	if got := oneLineText("abc", 0); got != "…" {
+		t.Errorf("zero limit: %q", got)
+	}
+	if got := oneLineText("", 0); got != "" {
+		t.Errorf("zero limit empty: %q", got)
+	}
+	// Cells, not code points: three double-width runes fill six cells.
+	if got := oneLineText("日本語です", 6); got != "日本…" {
+		t.Errorf("cjk cut: %q", got)
+	}
+
+	for _, c := range []struct {
+		name string
+		args toolArguments
+		want string
+	}{
+		{"known key wins", toolArguments(`{"cmd":"pat","extra":1}`), "pat"},
+		{"input fallback", toolArguments(`{"unknown":1}`), `{"unknown":1}`},
+		{"nothing", nil, ""},
+		{"no arguments", toolArguments(`{}`), ""},
+		{"query before path", toolArguments(`{"path":"/proj","query":"TODO"}`), "TODO"},
+		{"an array, compact", toolArguments(`{"urls": ["https://a", "https://b"]}`), `["https://a","https://b"]`},
+		// What toolArguments keeps for arguments that were not JSON.
+		{"not JSON", toolArguments(`"ls -la /proj"`), "ls -la /proj"},
+		{"an escape in a value", toolArguments(`{"cmd":"echo \u001b[31mred\u001b[0m"}`), "echo red"},
+	} {
+		if got := toolSummary(c.args, 100); got != c.want {
+			t.Errorf("%s: toolSummary = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestToolOutcome pins when a call shows ERR. is_error is not enough: a shell
+// command that failed, and a call cancelled while it ran inside a subagent,
+// come back without it, and only their text says what happened.
+func TestToolOutcome(t *testing.T) {
+	result := func(content string, isError bool) *itemRow {
+		r := &itemRow{typ: "message", data: itemData{Role: "tool", Content: flexString(content)}}
+		if isError {
+			r.data.IsError = json.RawMessage("true")
+		}
+		return r
+	}
+	const hint = "[shell-hint] You are on cmd.exe: POSIX utilities are not available. Use `findstr` (grep).\n\n"
+	for _, c := range []struct {
+		name, tool string
+		result     *itemRow
+		want       string
+	}{
+		{"marked an error", "read_file", result(`path "/x" is outside the allowed directories`, true), "ERR"},
+		{"rejected", "shell", result("The user rejected the tool call. Reason: not now", true), "ERR"},
+		{"exit status", "shell", result("Error executing command: exit status 2\nOutput: x", false), "ERR"},
+		{"killed", "shell", result("Error executing command: signal: killed\nOutput: x", false), "ERR"},
+		{"killed, through ACP", "shell", result("Error executing command: signal SIGKILL\nOutput: x", false), "ERR"},
+		{"exited 0, child left running", "shell",
+			result("Error executing command: exec: WaitDelay expired before I/O complete\nOutput: started", false), "ok"},
+		{"timed out", "shell", result("Command timed out after 30s\nOutput: x", false), "ERR"},
+		{"cancelled, the shell's word", "shell", result("Command cancelled", false), "ERR"},
+		{"a hint, then a failure", "shell", result(hint+"Error executing command: exit status 1\nOutput: x", false), "ERR"},
+		{"a hint over success", "shell", result(hint+"done", false), "ok"},
+		{"worked", "shell", result("hi", false), "ok"},
+		{"cancelled", "fetch", result("The tool call was canceled by the user.", false), "ERR"},
+		{"cancelled with its batch", "shell", result("The tool call was canceled because another tool call"+
+			" in the same batch was canceled by the user.", false), "ERR"},
+		{"skipped by a hook", "read_file", result("The tool call was skipped because a post_tool_use hook"+
+			" signalled run termination.", false), "ERR"},
+		{"the shell's words from another tool", "read_file", result("Error executing command: exit status 1", false), "ok"},
+		// docker-agent kept the tail of the output, and the failure was at its head.
+		{"a failure over 50 KB", "shell", result("Tool call result was too large (60000 bytes; limit 51200 bytes)."+
+			" The full result is available in a file: /tmp/x\n\nShowing the last 1 lines (up to 51200 bytes):\n\nFAIL", false), "ok"},
+		{"no result", "shell", nil, "no result"},
+		{"no call, marked an error", "", result("Tool 'x' is not available.", true), "ERR"},
+		{"no call", "", result("Error executing command: exit status 1", false), "ok"},
+	} {
+		if got := toolOutcome(c.tool, c.result); got != c.want {
+			t.Errorf("%s: toolOutcome = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestRenderWait pins how a wait_background_agents result is drawn: a line per
+// task under compact as well as full, and what each returned only under full.
+// Anything that is not that JSON is left to be drawn as plain output.
+func TestRenderWait(t *testing.T) {
+	content := `{"all_done":false,"timed_out":true,"error":"Wait cancelled: context canceled","tasks":[` +
+		`{"task_id":"t1","status":"completed","done":true,"output":"all done"},` +
+		`{"task_id":"t2","status":"failed","done":true,"error":"model failed"},` +
+		`{"task_id":"t3","status":"completed","done":true,"output":"cut","truncated":true},` +
+		`{"task_id":"t4","status":"running","done":false,"output":"step 1"}]}`
+	for _, c := range []struct {
+		tools string
+		want  []string
+	}{
+		{"full", []string{
+			"  err Wait cancelled: context canceled",
+			"  task t1 completed",
+			"  result all done",
+			"  task t2 failed",
+			"  err model failed",
+			"  task t3 completed [output truncated]",
+			"  result cut",
+			"  task t4 running",
+			"  result step 1",
+		}},
+		{"compact", []string{
+			"  err Wait cancelled: context canceled",
+			"  task t1 completed",
+			"  task t2 failed",
+			"  task t3 completed [output truncated]",
+			"  task t4 running",
+		}},
+	} {
+		got, ok := renderWait(content, &options{tools: c.tools, maxChars: 2000})
+		if !ok || !slices.Equal(got, c.want) {
+			t.Errorf("%s: renderWait = %q, %v; want %q", c.tools, got, ok, c.want)
+		}
+	}
+	for _, other := range []string{
+		"Background agent task started with ID: agent_task_1",
+		`{"all_done":true}`,
+		`{"tasks":"none"}`,
+		`[1, 2]`,
+	} {
+		if got, ok := renderWait(other, &options{tools: "full", maxChars: 2000}); ok {
+			t.Errorf("renderWait(%q) = %q, want it left as plain output", other, got)
+		}
+	}
+}
+
+// A subagent marker names the subagent where docker-agent put its row, under
+// every --tools: for a transfer_task right after the call, before the
+// subagent's own run; for a background agent where the parent was before the
+// subagent's last step, and so before its last message. A marker whose
+// subagent was deleted draws nothing.
+func TestSubsessionMarker(t *testing.T) {
+	out := runArgs(t, zooDB(t), "", "--tools", "none")
+	at := func(s string) int {
+		t.Helper()
+		i := strings.Index(out, s)
+		if i < 0 {
+			t.Fatalf("transcript lacks %q:\n%s", s, out)
+		}
+		return i
+	}
+	for _, c := range []struct{ before, marker, after string }{
+		{"@/proj/shot.png see attached", "session ❬zoo003↓❭", "⚑ ❬zoo003↓❭"},
+		{"Waiting for the background agent.", "session ❬zoo004↓❭", "slept"},
+	} {
+		if m := at(c.marker); at(c.before) > m || m > at(c.after) {
+			t.Errorf("%q is not between %q and %q", c.marker, c.before, c.after)
+		}
+	}
+	if n := strings.Count(out, "• subagent"); n != 2 {
+		t.Errorf("%d subagent heads, want 2", n)
+	}
+
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p", "2026-08-18T12:00:00Z")
+	d.userText("aaaaaa", "2026-08-18T12:00:00Z", "hi")
+	d.item("aaaaaa", "subsession", "") // subsession_id NULL: the child was deleted
+	if got := runArgs(t, d, ""); strings.Contains(got, "subagent") {
+		t.Errorf("a marker with no subagent was drawn:\n%s", got)
 	}
 }
 
@@ -573,8 +838,8 @@ func TestInlinedAttachments(t *testing.T) {
 
 // A prompt whose text holds a NUL byte is not text: it is drawn as one line
 // saying how big it is, and none of it reaches the output. A NUL is the whole
-// test — an escape in a prompt that has none is the prompt's own, and is
-// printed as it came.
+// test — an escape in a prompt that has none is the prompt's own, and is made
+// harmless like any other text's: the colour goes, the words stay.
 func TestBinaryPrompt(t *testing.T) {
 	d := newTestDB(t)
 	d.session("aaaaaa", "", "A", "/p", "2026-08-18T12:00:00Z")
@@ -588,7 +853,69 @@ func TestBinaryPrompt(t *testing.T) {
 	if strings.Contains(out, "\x00") || strings.Contains(out, "IHDR") || strings.Contains(out, "\x1b[2J") {
 		t.Errorf("the binary prompt reached the output:\n%q", out)
 	}
-	if !strings.Contains(out, "red \x1b[31mtext\x1b[0m") {
-		t.Errorf("a text prompt was not printed as-is:\n%q", out)
+	if !strings.Contains(out, "│ red text\n") {
+		t.Errorf("a text prompt lost more than its escapes:\n%q", out)
+	}
+}
+
+// Text from the store reaches the terminal harmless wherever it is printed,
+// not only in a turn's body: the session's directory on its banner, in the
+// key and under --list, a step's finish reason on its --stats line, and the
+// name of an item this version cannot read in the warning about it.
+func TestStoreTextNeutralised(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p/\x1b[2Jdir", "2026-08-18T12:00:00Z")
+	d.message("aaaaaa", "root", `{"role":"assistant","content":"hi","finish_reason":"stop\u001b[5m",`+
+		`"created_at":"2026-08-18T12:00:00Z"}`)
+	d.item("aaaaaa", "myst\x1b[1mery", `{"created_at":"2026-08-18T12:00:01Z"}`)
+	t.Setenv("COLUMNS", "")
+	for _, c := range []struct {
+		args  []string
+		wants []string
+	}{
+		{[]string{"--stats"}, []string{"aaaaaa   2026-08-18 12:00  /p/dir", "  /p/dir\n", "$0.0000 stop\n"}},
+		{[]string{"--list"}, []string{"│ /p/dir │"}},
+	} {
+		var stdout, stderr bytes.Buffer
+		if err := run(append([]string{"--db", d.path, "--everywhere", "--all"}, c.args...), &stdout, &stderr); err != nil {
+			t.Fatalf("run(%v): %v", c.args, err)
+		}
+		out := stdout.String() + stderr.String()
+		if strings.Contains(out, "\x1b") {
+			t.Errorf("%v: a raw ESC reached the output:\n%q", c.args, out)
+		}
+		for _, want := range append(c.wants, "(first: mystery in aaaaaa)") {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v: output lacks %q:\n%s", c.args, want, out)
+			}
+		}
+	}
+}
+
+// A wait docker-agent marked an error, for a task it no longer knows, draws
+// its task lines like any other wait rather than its JSON as an err block.
+// And a result left over when one id is answered twice is drawn nameless after
+// the step's calls, not dropped.
+func TestWaitErrorAndSecondAnswer(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p", "2026-08-18T12:00:00Z")
+	d.message("aaaaaa", "root", `{"role":"assistant","created_at":"2026-08-18T12:00:00Z","finish_reason":"tool_calls",`+
+		`"tool_calls":[{"id":"c1","type":"function","function":{"name":"wait_background_agents","arguments":"{}"}},`+
+		`{"id":"c2","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\"echo one\"}"}}]}`)
+	d.message("aaaaaa", "root", `{"role":"tool","tool_call_id":"c1","is_error":true,"created_at":"2026-08-18T12:00:01Z",`+
+		`"content":`+jsonStr(`{"all_done":false,"tasks":[{"task_id":"t9","status":"not_found","done":false,`+
+		`"error":"Task not found; it may have been pruned."}]}`)+`}`)
+	d.message("aaaaaa", "root", `{"role":"tool","tool_call_id":"c2","content":"out one","created_at":"2026-08-18T12:00:01Z"}`)
+	d.message("aaaaaa", "root", `{"role":"tool","tool_call_id":"c2","content":"out two","created_at":"2026-08-18T12:00:02Z"}`)
+
+	compact, full := runArgs(t, d, ""), runArgs(t, d, "", "--tools", "full")
+	for _, c := range []struct{ name, out, want string }{
+		{"compact", compact, `ERR +1s\n  │   task t9 not_found\n  │ shell echo one +ok +1s\n  │ \? +ok\n`},
+		{"full", full, `ERR +1s\n  │   task t9 not_found\n  │   err Task not found; it may have been pruned\.\n`},
+		{"full", full, `\n  │ \? +ok\n  │   out out two\n`},
+	} {
+		if !regexp.MustCompile(c.want).MatchString(c.out) {
+			t.Errorf("%s: transcript lacks %q:\n%s", c.name, c.want, c.out)
+		}
 	}
 }

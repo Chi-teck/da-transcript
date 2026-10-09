@@ -72,6 +72,23 @@ type toolCall struct {
 	} `json:"function"`
 }
 
+// waitResult is what wait_background_agents returns as its result's content
+// (pkg/tools/builtin/agent/wait.go:waitResult): an error when the wait itself
+// was cancelled, and one entry per task it was asked about. A task's output, or
+// the error it failed with, is cut at 4 KB, and truncated says so.
+type waitResult struct {
+	Error flexString `json:"error"`
+	Tasks []waitTask `json:"tasks"`
+}
+
+type waitTask struct {
+	TaskID    flexString      `json:"task_id"`
+	Status    flexString      `json:"status"` // completed, failed, stopped, running, not_found
+	Output    flexString      `json:"output"`
+	Error     flexString      `json:"error"`
+	Truncated json.RawMessage `json:"truncated"` // truthy() reads it
+}
+
 type stepUsage struct {
 	Input      json.RawMessage `json:"input_tokens"`
 	Output     json.RawMessage `json:"output_tokens"`

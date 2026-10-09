@@ -58,14 +58,14 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 		// Without a root there is nothing to be relative to, and the absolute
 		// path is the point — it is what tells two projects apart. It is
 		// printed in the shape the store holds it in: a directory is data here
-		// the way a message body is.
+		// the way a message body is, and like one it is made harmless.
 		where := s.directory
 		if root != "" {
 			if rel, err := filepath.Rel(root, where); err == nil && !strings.HasPrefix(rel, "..") {
 				where = rel
 			}
 		}
-		where = homeTilde(where)
+		where = neutralise(homeTilde(where))
 		if !ruled {
 			rows = append(rows, []string{s.tag, shortStamp(s.timeCreated), where, titleOf(s)})
 			continue

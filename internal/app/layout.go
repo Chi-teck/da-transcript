@@ -49,11 +49,10 @@ func tailCells(s string, limit int) string {
 // wrapLine can close at a break and reopen after the prefix, and the ones a
 // --color always run has to be able to strip back to what --color never
 // printed. escSeq asks which byte runs the terminal will advance zero columns
-// for, which is all of them, whoever wrote them: message bodies and tool
-// output are printed exactly as they arrived, so a transcript routinely
-// carries escapes it did not write — a hyperlink from a fetch, a colour or
-// a cursor move from a shell call — and the layout has to measure those at
-// nothing or it will budget a line it cannot fit.
+// for, which is all of them, whoever wrote them. Text from the store goes
+// through neutralise before it is laid out, so the layout only meets this
+// program's own colour now; it still measures a foreign escape at nothing,
+// so that one that slipped past would not budget a line it cannot fit.
 var (
 	sgrSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
 	escSeq = regexp.MustCompile(
@@ -81,15 +80,47 @@ func stripEscapes(s string) string {
 	return escSeq.ReplaceAllString(s, "")
 }
 
+// neutralise makes text from the store harmless to print. A shell call's
+// output carries colour, cursor moves, screen clears and hyperlinks, and a
+// reply can quote a file's raw bytes; printed as they came, they would act on
+// the reader's terminal instead of being read. Escape sequences go and the
+// text inside them stays, a CRLF becomes the newline it means, and every other
+// control character but tab and newline shows as its control picture (␀, ␍,
+// ␛, ␡ …) — C1 ones, and bytes that are not UTF-8, as U+FFFD. Each of those is
+// one cell, like the character it stands for would have had to be.
+func neutralise(s string) string {
+	if strings.IndexFunc(s, isControl) < 0 && utf8.ValidString(s) {
+		return s
+	}
+	s = strings.ReplaceAll(stripEscapes(s), "\r\n", "\n")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case !isControl(r):
+			return r
+		case r < 0x20:
+			return 0x2400 + r // the Control Pictures block, in C0 order
+		case r == 0x7f:
+			return '␡'
+		}
+		return utf8.RuneError
+	}, s)
+}
+
+// isControl reports a C0 or C1 control character or DEL, tab and newline
+// apart.
+func isControl(r rune) bool {
+	return (r < 0x20 && r != '\t' && r != '\n') || (r >= 0x7f && r <= 0x9f)
+}
+
 // visibleCells is cells() for a string that may carry escapes: none of them
 // take a column.
 //
 // Every escape and not just our own, because the two ways one gets into a line
 // fail the same way. A line this program painted is measured after the fact by
-// wrap() and padTo(), and a line quoting a tool's output can arrive carrying
-// escapes of its own, since bodies are printed exactly as they came. Counting
-// either as text budgets a line against a width it does not have and pushes it
-// past the margin — which is the one thing TestWidthInvariant is here to catch.
+// wrap() and padTo(), and a line quoting text from the store could carry
+// escapes of its own if neutralise ever let one through. Counting either as
+// text budgets a line against a width it does not have and pushes it past the
+// margin — which is the one thing TestWidthInvariant is here to catch.
 //
 // Reach for it only where painted text is unavoidable — wrap() and padTo() take
 // what they are given, so they have to. Everywhere else the rule is to measure

@@ -125,6 +125,9 @@ func TestBlocksZoo(t *testing.T) {
 		"m5": {"call_8"},
 		"m7": nil, // its call never got a result
 		"h1": {"call_h1"},
+		// In the order the calls finished, not the order they were made.
+		"v1": {"call_v1", "call_v2", "call_v3", "call_v4", "call_v6", "call_v7", "call_v8", "call_v9",
+			"call_v10", "call_v11", "call_v12", "call_v14", "call_v13", "call_v5"},
 	}
 	found := map[string]bool{}
 	for _, b := range all {

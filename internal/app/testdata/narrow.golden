@@ -19,6 +19,37 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ 2026-08-17 10:02:00 • assistant • glm-5.3
   │
   │ I will run tools.
+  │
+  │ shell echo hi                                ok       0s
+  │   in
+  │     {
+  │       "cmd": "echo hi"
+  │     }
+  │   out hi
+  │ shell ls /nope                              ERR       1s
+  │   in
+  │     {
+  │       "cmd": "ls /nope"
+  │     }
+  │   err
+  │     Error executing command: exit status 2
+  │     Output: ls: cannot access '/nope': No such file or
+  │     directory
+  │ shell uname                                 ERR       9s
+  │   in
+  │     {
+  │       "cmd": "uname"
+  │     }
+  │   err The user rejected the tool call.
+  │ read_file /proj/logo.png                     ok      10s
+  │   in
+  │     {
+  │       "path": "/proj/logo.png"
+  │     }
+  │   out
+  │     Read image file /proj/logo.png [image/png] (20439
+  │     bytes)
+  │     file (image)
 
 
   │ 2026-08-17 10:03:00 • user
@@ -26,6 +57,23 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ @/proj/shot.png see attached
   │
   │ attachment shot.png (image/png)
+
+
+  │ 2026-08-17 10:03:30 • assistant • glm-5.3
+  │
+  │ transfer_task do the subtask                 ok      90s
+  │   in
+  │     {
+  │       "agent": "helper",
+  │       "task": "do the subtask",
+  │       "expected_output": "done"
+  │     }
+  │   out done: the subtask is finished
+
+
+  │ 2026-08-17 10:03:30 • subagent
+  │
+  │ session ❬zoo003↓❭
 
 
  ⚑ ❬zoo003↓❭ Transferred task                          /proj
@@ -65,9 +113,36 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ Please proceed.
 
 
+  │ 2026-08-17 10:04:00 • assistant • glm-5.3 @helper
+  │
+  │ shell sleep 20                               ok      20s
+  │   in
+  │     {
+  │       "cmd": "sleep 20"
+  │     }
+  │   out <no output>
+
+
   │ 2026-08-17 10:04:50 • assistant • glm-5.3 @helper
   │
   │ done: the subtask is finished
+
+
+ ↻ ❬zoo001❭ Zoo main                                   /proj
+────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:05:30 • assistant • glm-5.3
+  │
+  │ run_background_agent sleep 20                ok       0s
+  │   in
+  │     {
+  │       "agent": "helper",
+  │       "task": "sleep 20"
+  │     }
+  │   out
+  │     Background agent task started with ID: agent_task_1
+  │     Agent: helper
+  │     Task: sleep 20
 
 
  ⚑ ❬zoo004↓❭ Background agent task                     /proj
@@ -109,6 +184,18 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ 2026-08-17 10:06:00 • assistant • glm-5.3
   │
   │ Waiting for the background agent.
+  │
+  │ shell date                                   ok       1s
+  │   in
+  │     {
+  │       "cmd": "date"
+  │     }
+  │   out Mon Aug 17 10:06:01 UTC 2026
+
+
+  │ 2026-08-17 10:06:01 • subagent
+  │
+  │ session ❬zoo004↓❭
 
 
  ↻ ❬zoo004↓❭ Background agent task                     /proj
@@ -122,6 +209,19 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
  ↻ ❬zoo001❭ Zoo main                                   /proj
 ────────────────────────────────────────────────────────────
 
+  │ 2026-08-17 10:06:30 • assistant • glm-5.3
+  │
+  │ wait_background_agents ["agent_task_1"]      ok       0s
+  │   in
+  │     {
+  │       "task_ids": [
+  │         "agent_task_1"
+  │       ]
+  │     }
+  │   task agent_task_1 completed
+  │   result slept
+
+
   │ 2026-08-17 10:06:35 • user
   │
   │ also check the logs
@@ -130,6 +230,15 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ 2026-08-17 10:06:35 • assistant • unfinished
   │
   │ partial answer
+
+
+  │ 2026-08-17 10:07:00 • assistant • glm-5.3
+  │
+  │ shell sleep 20                                 no result
+  │   in
+  │     {
+  │       "cmd": "sleep 20"
+  │     }
 
 
   │ 2026-08-17 10:07:00 • compaction
@@ -152,6 +261,12 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ not shown: unknown to this version of da-transcript
 
 
+  │ 2026-08-17 10:09:40 • tool
+  │
+  │ ?                                            ok
+  │   out stray result
+
+
  ⚑ ❬zoo002❭ (untitled)                             /proj/sub
 ────────────────────────────────────────────────────────────
 
@@ -163,6 +278,146 @@ zoo004↓  2026-08-17 10:05  /proj      Background agent task
   │ 2026-08-18 09:31:00 • assistant • glm-5.3-flash @viewer
   │
   │ ok
+
+
+  │ 2026-08-18 09:32:00 • assistant • glm-5.3-flash @viewer
+  │
+  │ shell echo 日本語のコマンド 🎌 とても長い…   ok       0s
+  │   in
+  │     {
+  │       "cmd": "echo 日本語のコマンド 🎌 とても長い行
+  │       もっと長く もっと長く もっと長く"
+  │     }
+  │   out 日本語のコマンド 🎌 とても長い行 もっと長く
+  │   もっと長く もっと長く
+  │ shell cat build.log                          ok       1s
+  │   in
+  │     {
+  │       "cmd": "cat build.log",
+  │       "cwd": "/proj/sub"
+  │     }
+  │   out
+  │     building
+  │     see run 7 for the log
+  │     progress 10%␍50%␍100%
+  │     test_a FAIL␇
+  │     nul:␀ esc:␛ end
+  │ shell nohup ./server &                       ok       1s
+  │   in
+  │     {
+  │       "cmd": "nohup ./server &"
+  │     }
+  │   out
+  │     Error executing command: exec: WaitDelay expired
+  │     before I/O complete
+  │     Output: started pid 4242
+  │ shell dir && echo done                      ERR       2s
+  │   in
+  │     {
+  │       "cmd": "dir && echo done"
+  │     }
+  │   err
+  │     [shell-hint] You are on Windows PowerShell 5.1:
+  │     chain commands with `;`, not `&&` or `||`. Retry
+  │     with the corrected syntax.
+  │
+  │     Error executing command: exit status 1
+  │     Output: The token '&&' is not a valid statement
+  │     separator in this version.
+  │ shell make test                             ERR      30s
+  │   in
+  │     {
+  │       "cmd": "make test",
+  │       "timeout": 30
+  │     }
+  │   err
+  │     Command timed out after 30s
+  │     Output: running 12 tests
+  │ shell ls -la /proj                          ERR       2s
+  │   in ls -la /proj
+  │   err Error calling tool: invalid character 'l' looking
+  │   for beginning of value
+  │ search_files_content TODO                    ok       2s
+  │   in
+  │     {
+  │       "path": "/proj",
+  │       "query": "TODO",
+  │       "is_regex": false
+  │     }
+  │   out /proj/main.go:3: // TODO
+  │ write_file /proj/notes.md                    ok       3s
+  │   in
+  │     {
+  │       "path": "/proj/notes.md",
+  │       "content": "# Notes\n\nThe build runs on every
+  │       push and takes about four minutes.\nThe slow part
+  │       is the integration suite; run it locally with make
+  │       test."
+  │     }
+  │   out File written successfully: /proj/notes.md (138
+  │   bytes)
+  │ list_background_jobs                         ok       3s
+  │   out
+  │     Background Jobs:
+  │
+  │     No background jobs found.
+  │ directory_tree [output truncated]            ok       4s
+  │   in
+  │     {
+  │       "path": "/"
+  │     }
+  │   out
+  │     Tool call result was too large (219138 bytes; limit
+  │     51200 bytes). The full result is available in a
+  │     file:
+  │     /tmp/docker-agent-tool-results/7d4a9c1e/tool-result-
+  │     1.txt
+  │
+  │     Showing the last 3 lines (up to 51200 bytes):
+  │
+  │     /usr/share/zoneinfo/UTC
+  │     /usr/share/zoneinfo/Zulu
+  │     /var
+  │ get_document {"doc_id":"42"}                 ok       5s
+  │   in
+  │     {
+  │       "doc_id": "42"
+  │     }
+  │   out
+  │     Fetched spec.pdf
+  │     file (application/pdf)
+  │ fetch ["https://example.com"]                ok       6s
+  │   in
+  │     {
+  │       "urls": [
+  │         "https://example.com"
+  │       ],
+  │       "format": "markdown"
+  │     }
+  │   out
+  │     # Example Domain
+  │
+  │     This domain is for use in illustrative examples in
+  │     documents.
+  │ wait_background_agents ["agent_task_2","a…   ok      20s
+  │   in
+  │     {
+  │       "task_ids": [
+  │         "agent_task_2",
+  │         "agent_task_3"
+  │       ],
+  │       "timeout": 20
+  │     }
+  │   task agent_task_2 failed
+  │   err model failed: HTTP 429
+  │   task agent_task_3 running [output truncated]
+  │   result step 1 of 3 done
+  │ shell sleep 60                              ERR      10s
+  │   in
+  │     {
+  │       "cmd": "sleep 60"
+  │     }
+  │   err The tool call was canceled by the user.
 
 
   │ 2026-08-18 09:35:00 • user

@@ -2,14 +2,126 @@ package app
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
+
+// First argument key that says what a tool call was actually about. Covers
+// docker-agent's built-ins and lets an MCP tool name itself through whichever
+// of these it happens to take, without a per-tool table. oc-transcript's list
+// in its order, with docker-agent's own names put in: cmd first, for the shell
+// and background jobs; query before path, for search_files_content; task
+// before agent and name, for transfer_task, run_background_agent and
+// run_skill.
+var argKeys = []string{
+	"cmd", "command", "filePath", "pattern", "urls", "url", "query", "channel", "username",
+	"post_id", "task", "prompt", "thought", "memory", "path", "paths", "description",
+	"descriptions", "task_ids", "task_id", "job_id", "session_id", "agent", "name", "file",
+	"code", "entity_type", "message",
+}
+
+// oneLine collapses a value to a single line of at most limit cells. A
+// non-string value is its compact JSON. The cap is measured in display cells,
+// not code points, so CJK and emoji count for the room they take.
+func oneLine(raw json.RawMessage, limit int) string {
+	s, ok := unquoteFast(raw)
+	if !ok {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			if string(raw) == "null" || len(raw) == 0 {
+				return ""
+			}
+			s = reformatJSON(raw, -1)
+		}
+	}
+	return oneLineText(s, limit)
+}
+
+func oneLineText(value string, limit int) string {
+	// Neutralised before the whitespace goes, so a summary never carries an
+	// escape and a CRLF collapses like any other line break.
+	value = strings.Join(strings.Fields(neutralise(value)), " ")
+	if limit < 1 {
+		if value != "" {
+			return "…"
+		}
+		return ""
+	}
+	return truncateCells(value, limit)
+}
+
+// toolSummary is the one-line gist of a tool call: the first known argument
+// that has a value, else the whole arguments. Arguments that were not JSON are
+// kept as a JSON string, which is no object, so they come out as their text.
+func toolSummary(args toolArguments, limit int) string {
+	input := json.RawMessage(args)
+	var keyed map[string]json.RawMessage
+	if truthy(input) {
+		if err := json.Unmarshal(input, &keyed); err != nil {
+			keyed = nil
+		}
+		for _, key := range argKeys {
+			if v, ok := keyed[key]; ok && truthy(v) {
+				return oneLine(v, limit)
+			}
+		}
+	}
+	if truthy(input) {
+		return oneLine(input, limit)
+	}
+	return ""
+}
+
+// renderWait draws what wait_background_agents returned, which is how
+// docker-agent hands a background agent's end back to its parent where
+// opencode injects a <task> envelope. It is a record, not prose, so it is drawn
+// as one: a line per task with its id and the state the wait found it in —
+// under compact too, the way the envelope's line is, so a task that failed or
+// is still running shows without asking for more — and under --tools full,
+// what the task returned or the error it failed with. An error of the wait's
+// own comes first. A result that is not this JSON comes back ok=false and is
+// drawn like any other output.
+//
+// No session tag on the line: a task id is docker-agent's own counter, not a
+// session id, and the subsession marker names the session. Nor is the line
+// charged to --arg-width, which caps a summary of what the model wrote; this
+// line holds only docker-agent's id and status.
+func renderWait(content string, opts *options) ([]string, bool) {
+	var w waitResult
+	if err := json.Unmarshal([]byte(content), &w); err != nil || w.Tasks == nil {
+		return nil, false
+	}
+	paint := opts.paint
+	var lines []string
+	if w.Error != "" {
+		lines = append(lines, indentBlock("err", neutralise(string(w.Error)), opts.maxChars, paint, errColor))
+	}
+	for _, t := range w.Tasks {
+		state := neutralise(cmp.Or(string(t.TaskID), "?") + " " + cmp.Or(string(t.Status), "?"))
+		line := "  " + paint.paint("task", grey) + " " + paint.paint(state, argColor)
+		// Cut at 4 KB by docker-agent; the rest is not kept anywhere.
+		if truthy(t.Truncated) {
+			line += " " + paint.paint("[output truncated]", dim)
+		}
+		lines = append(lines, line)
+		if opts.tools != "full" {
+			continue
+		}
+		if t.Output != "" {
+			lines = append(lines, indentBlock("result", neutralise(string(t.Output)), opts.maxChars, paint, grey))
+		}
+		if t.Error != "" {
+			lines = append(lines, indentBlock("err", neutralise(string(t.Error)), opts.maxChars, paint, errColor))
+		}
+	}
+	return lines, true
+}
 
 // capRunes caps text at limit code points, saying how much was dropped. The
 // cap is on bulk, not width — the terminal width is the wrapper's business.
@@ -42,6 +154,221 @@ func indentBlock(label, body string, limit int, paint Paint, color int) string {
 		return "  " + tag + "\n" + strings.Join(lines, "\n")
 	}
 	return "  " + tag + " " + paint.paint(strings.TrimSpace(body), argColor)
+}
+
+// outcomeWidth is the right-hand block of a tool line: the mark and the
+// duration together, one column whatever either of them turns out to be.
+const outcomeWidth = 12
+
+// outcomeCell lays that block out. Fixed fields, so outcome and duration each
+// line up as their own column: ok/ERR sit right-aligned in the first three
+// cells with the duration after them, and a longer mark such as `no result` is
+// right-aligned over the whole block instead of spilling left into the
+// summary's room.
+func outcomeCell(mark, took string) (markCell, tookCell string) {
+	if cells(mark) > 3 {
+		if took == "" {
+			return fmt.Sprintf("%*s", outcomeWidth, mark), ""
+		}
+		// One space between them here rather than the usual two, so a wide
+		// status and a duration would still fit the block together. Kept as
+		// oc has it, though no call drawn here is both: `no result`, the one
+		// wide mark, never has a duration.
+		return fmt.Sprintf("%*s", max(cells(mark), outcomeWidth-1-cells(took)), mark), " " + took
+	}
+	return fmt.Sprintf("%3s", mark), fmt.Sprintf("  %7s", took)
+}
+
+// toolDuration is how long a call took, in whole seconds, or "" when it got
+// no result. It runs from the call's step, which docker-agent stamps when the
+// model finished it, to the result, so the time a call waited for approval is
+// in it; the store keeps no time of the tool's own.
+func toolDuration(called int64, result *itemRow) string {
+	if result == nil || result.timeCreated < called {
+		return ""
+	}
+	return fmt.Sprintf("%ds", (result.timeCreated-called)/1000)
+}
+
+// renderTool is one tool call: a head line with the outcome at the right
+// margin, then, with --tools full, the arguments and the output or error. A
+// result no call answers comes with call nil and is drawn nameless, with no
+// arguments and no duration; a call that got no result comes with result nil.
+// called is the time of the call's step.
+func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []string {
+	var name, took string
+	var args toolArguments
+	if call != nil {
+		name, args = string(call.Function.Name), call.Function.Arguments
+		took = toolDuration(called, result)
+	}
+	mark := toolOutcome(name, result)
+	failed := mark == "ERR"
+	markCell, tookCell := outcomeCell(mark, took)
+	right := markCell + tookCell
+
+	paint := opts.paint
+	label := cmp.Or(neutralise(name), "?")
+	truncated := outputTruncated(result)
+	note := ""
+	if truncated {
+		note = "[output truncated]"
+	}
+
+	// The outcome sits at the right margin so a run of calls scans as a column
+	// of ok/ERR; the summary takes what is left between the name and it, and
+	// yields entirely — the note first — sooner than push past the margin.
+	avail := opts.width - bodyIndent - cells(right) - 2
+	if cells(label) > avail {
+		label = truncateCells(label, max(1, avail))
+	}
+	rem := avail - cells(label)
+	if note != "" && rem < 1+cells(note) {
+		note = ""
+	}
+	if note != "" {
+		rem -= 1 + cells(note)
+	}
+	summary := ""
+	if rem >= 10 {
+		summary = toolSummary(args, min(opts.argWidth, rem-1))
+	}
+	head := paint.paint(label, grey)
+	if summary != "" {
+		head += " " + paint.paint(summary, argColor)
+	}
+	if note != "" {
+		head += " " + paint.paint(note, dim)
+	}
+	markColor := okColor
+	if failed {
+		markColor = errColor
+	}
+	// A call with no duration leaves the cell blank, and blanks are not painted:
+	// wrapped in a span they would survive the trim at the end of the line, and
+	// the coloured run would carry trailing cells the plain one does not.
+	if strings.TrimSpace(tookCell) != "" {
+		tookCell = paint.paint(tookCell, dim)
+	}
+	outcome := paint.paint(markCell, markColor, failed) + tookCell
+	lines := []string{padTo(head, outcome, opts.width-bodyIndent)}
+
+	// The output is the result's text, neutralised, and a line naming each image
+	// or document that came with it by its type. Their data is the file itself,
+	// base64, so it is never printed, and the text part docker-agent puts in
+	// front of them is the content over again.
+	var outputs []string
+	if result != nil {
+		if text := strings.TrimRightFunc(neutralise(string(result.data.Content)), unicode.IsSpace); text != "" {
+			outputs = append(outputs, text)
+		}
+		for _, p := range result.data.MultiContent {
+			switch p.Type {
+			case "document":
+				mime := ""
+				if p.Document != nil {
+					mime = string(p.Document.MimeType)
+				}
+				outputs = append(outputs, "file ("+cmp.Or(neutralise(mime), "?")+")")
+			case "image_url":
+				// Its type is inside the data: URL, which is never decoded.
+				outputs = append(outputs, "file (image)")
+			}
+		}
+	}
+	output := strings.Join(outputs, "\n")
+
+	var wait []string
+	decoded := false
+	if result != nil && name == "wait_background_agents" {
+		wait, decoded = renderWait(string(result.data.Content), opts)
+	}
+	switch {
+	case opts.tools == "full":
+		if input := json.RawMessage(args); truthy(input) {
+			// Arguments that were not JSON are kept as a JSON string, and are
+			// printed as the text the model wrote.
+			in := reformatJSON(input, 2)
+			var text string
+			if json.Unmarshal(input, &text) == nil {
+				in = text
+			}
+			lines = append(lines, indentBlock("in", neutralise(in), opts.maxChars, paint, grey))
+		}
+		switch {
+		case decoded:
+			lines = append(lines, wait...)
+		case failed:
+			lines = append(lines, indentBlock("err", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
+		case output != "":
+			lines = append(lines, indentBlock("out", output, opts.maxChars, paint, grey))
+		}
+	case decoded:
+		lines = append(lines, wait...)
+	case failed:
+		lines = append(lines, indentBlock("err", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
+	}
+	return lines
+}
+
+// cancelledCall holds the texts docker-agent stores for a call cut off while
+// it ran (pkg/runtime/toolexec/dispatcher.go:cancellationMessage). Inside a
+// subagent they are stored without is_error.
+var cancelledCall = []string{
+	"The tool call was canceled by the user.",
+	"The tool call was canceled because another tool call in the same batch was canceled by the user.",
+	"The tool call was skipped because a post_tool_use hook signalled run termination.",
+}
+
+// toolOutcome is the mark a call gets: ok, ERR, or no result when no result
+// row answers it — still running, waiting for approval, cut off, or left
+// there; the store does not say which. name is the call's tool, "" for a
+// result no call answers.
+//
+// docker-agent keeps no status for a call, only is_error, which it sets for
+// what it refused or could not run — a rejection, a denial, a hook's block, a
+// handler's error — and not for most of what failed while running. So the text
+// is read too. A call cut off while it ran reads as one of cancelledCall,
+// without is_error inside a subagent. And a shell command that failed comes
+// back as output, opening with what went wrong (shell.go:formatCommandOutput,
+// after a [shell-hint] paragraph when there is one): an exit status or a
+// signal, a timeout, or the command cancelled. opencode records such a command
+// as completed and oc-transcript shows it ok; it is ERR here so that a failed
+// build or test run stands out. The one exception is WaitDelay, which Go
+// returns only for a command that exited 0 but left a child holding its output
+// open. A failing command whose output was over 50 KB still reads ok:
+// docker-agent then keeps only the end of it, and the line saying it failed was
+// at the start.
+func toolOutcome(name string, result *itemRow) string {
+	if result == nil {
+		return "no result"
+	}
+	text := string(result.data.Content)
+	if truthy(result.data.IsError) || slices.Contains(cancelledCall, text) {
+		return "ERR"
+	}
+	if name == "shell" {
+		if strings.HasPrefix(text, "[shell-hint] ") {
+			if _, rest, ok := strings.Cut(text, "\n\n"); ok {
+				text = rest
+			}
+		}
+		const failure = "Error executing command: "
+		if text == "Command cancelled" || strings.HasPrefix(text, "Command timed out after ") ||
+			(strings.HasPrefix(text, failure) && !strings.HasPrefix(text, failure+"exec: WaitDelay expired")) {
+			return "ERR"
+		}
+	}
+	return "ok"
+}
+
+// outputTruncated reports that docker-agent cut the result short. Its
+// limit_large_tool_results hook, always on, swaps a result over 50 KB for a
+// notice naming the file the whole of it went to, then an excerpt
+// (pkg/hooks/builtins/limit_large_tool_results_other.go). The notice is all
+// the store keeps, and the file is deleted when the session ends.
+func outputTruncated(result *itemRow) bool {
+	return result != nil && strings.HasPrefix(string(result.data.Content), "Tool call result was too large (")
 }
 
 // headSep joins the fields of a header — stamp, role, model. A gap alone reads
@@ -101,8 +428,8 @@ func newChunk(text string) chunk { return chunk{text: text, color: noColor} }
 // gap was a third way of saying the same thing and the only one that cost a
 // hole in the line.
 func renderAttachment(name, mime string, paint Paint) string {
-	return paint.paint("attachment", grey) + " " + paint.paint(cmp.Or(name, "?"), argColor) +
-		" " + paint.paint("("+cmp.Or(mime, "?")+")", dim)
+	return paint.paint("attachment", grey) + " " + paint.paint(cmp.Or(neutralise(name), "?"), argColor) +
+		" " + paint.paint("("+cmp.Or(neutralise(mime), "?")+")", dim)
 }
 
 // renderStats is the --stats line: what one step of a turn spent.
@@ -131,7 +458,7 @@ func renderStats(data *itemData, paint Paint) string {
 	// The finish reason is the one thing on the line nobody asked for, so it
 	// keeps the quiet tier — and the tier is what sets it apart now that the gap
 	// in front of it is one space like every other.
-	if reason := string(data.FinishReason); reason != "" {
+	if reason := neutralise(string(data.FinishReason)); reason != "" {
 		stats += " " + paint.paint(reason, dim)
 	}
 	return stats
@@ -146,15 +473,32 @@ var attachedFile = regexp.MustCompile(`(?m)^<attached_file path=("(?:[^"\\]|\\.)
 // nothing to show. The header names the turn, the rail beside it says how far
 // the turn runs, and blank lines do the separating within.
 //
-// What a block shows is its head item. The tool results riding with a step
-// draw nothing yet, and nor do a result no call answers, a subagent marker or
-// an evaluator's call.
+// What a block shows is its head item, and a step's tool calls with the
+// results riding along with it. A result no call answers is a turn of its own,
+// and so is a subagent marker; an evaluator's call draws nothing.
+//
+// Everything printed from the store goes through neutralise first: bodies are
+// printed as the agent received them, except that escape sequences and
+// control characters are made harmless.
 func renderBlock(b block, opts *options) []string {
 	it := b.head
 	data := &it.data
 	paint := opts.paint
 	var body []chunk
 	add := func(text string) { body = append(body, newChunk(text)) }
+	// A body's text, or nothing when it is only whitespace.
+	addText := func(text string) {
+		if text = strings.TrimRightFunc(neutralise(text), unicode.IsSpace); text != "" {
+			add(text)
+		}
+	}
+	// One tool call's lines. Tool chunks pack together, with no blank line
+	// between them, so their outcomes scan as a column.
+	addTool := func(lines []string) {
+		c := newChunk(strings.Join(lines, "\n"))
+		c.tool = true
+		body = append(body, c)
+	}
 	kind := it.typ
 	switch {
 	case it.unknown != "":
@@ -176,8 +520,8 @@ func renderBlock(b block, opts *options) []string {
 			switch text := string(data.Content); {
 			case strings.Contains(text, "\x00"):
 				add(paint.paint(fmt.Sprintf("not shown: binary data (%d bytes)", len(text)), dim))
-			case strings.TrimSpace(text) != "":
-				add(strings.TrimRightFunc(text, unicode.IsSpace))
+			default:
+				addText(text)
 			}
 			for _, p := range data.MultiContent {
 				// The attachments, named. A document part is how docker-agent
@@ -221,22 +565,50 @@ func renderBlock(b block, opts *options) []string {
 			}
 
 		case "assistant":
-			if text := string(data.ReasoningContent); opts.reasoning && strings.TrimSpace(text) != "" {
+			reasoning := strings.TrimRightFunc(neutralise(string(data.ReasoningContent)), unicode.IsSpace)
+			if opts.reasoning && reasoning != "" {
 				// No label: the colour is the label. Reasoning is the one item whose
 				// whole body is a single kind of thing, so a hue over all of it says
 				// what a word in front of the first line said, without competing with
 				// the prose for the eye.
-				c := newChunk(capRunes(strings.TrimRightFunc(text, unicode.IsSpace), opts.maxChars))
+				c := newChunk(capRunes(reasoning, opts.maxChars))
 				c.color = reasonColor
 				body = append(body, c)
 			}
-			if text := string(data.Content); strings.TrimSpace(text) != "" {
-				add(strings.TrimRightFunc(text, unicode.IsSpace))
+			addText(string(data.Content))
+			if opts.tools != "none" {
+				// A call in the order the model made it, each with the first
+				// result for its id that no call before it took.
+				taken := make([]bool, len(b.results))
+				for i := range data.ToolCalls {
+					call := &data.ToolCalls[i]
+					var result *itemRow
+					for j, r := range b.results {
+						if !taken[j] && r.data.ToolCallID == call.ID {
+							taken[j], result = true, r
+							break
+						}
+					}
+					addTool(renderTool(call, it.timeCreated, result, opts))
+				}
+				// An id answered twice leaves a result no call is left to
+				// claim. It is drawn without one rather than dropped.
+				for j, r := range b.results {
+					if !taken[j] {
+						addTool(renderTool(nil, 0, r, opts))
+					}
+				}
 			}
 			// A step cut off gets no line: docker-agent writes its usage when the
 			// step finishes, with the finish reason.
 			if opts.stats && data.FinishReason != "" {
 				add(renderStats(data, paint))
+			}
+
+		case "tool":
+			// A result no call answers.
+			if opts.tools != "none" {
+				addTool(renderTool(nil, 0, it, opts))
 			}
 		}
 
@@ -249,10 +621,23 @@ func renderBlock(b block, opts *options) []string {
 	case it.typ == "error":
 		// A failed run, drawn the way a step that failed is.
 		kind = "assistant"
-		add(indentBlock("error", errorText(string(data.Code), string(data.Message)), opts.maxChars, paint, errColor))
+		text := neutralise(errorText(string(data.Code), string(data.Message)))
+		add(indentBlock("error", text, opts.maxChars, paint, errColor))
 
 	case it.typ == "termination":
-		add(paint.paint(cmp.Or(string(data.Message), string(data.Reason), "?"), dim))
+		add(paint.paint(neutralise(cmp.Or(string(data.Message), string(data.Reason), "?")), dim))
+
+	case it.typ == "subsession":
+		// Where a subagent's run was folded back into this session, under
+		// every --tools: the tag on the subagent's own banner, so the two can
+		// be matched by eye. The ↓ is always due, since the subagent's parent is
+		// this session and this session is on screen. A subagent since deleted
+		// leaves no id, and nothing to name.
+		kind = "subagent"
+		if it.subsession != "" {
+			tag := tagOpen + tagFor(it.subsession) + "↓" + tagClose
+			add(paint.paint("session", grey) + " " + paint.paint(tag, sessionColor))
+		}
 	}
 
 	if len(body) == 0 {
@@ -274,6 +659,8 @@ func renderBlock(b block, opts *options) []string {
 	if suffix := headSuffix(it); len(suffix) > 0 {
 		head += headSep + strings.Join(suffix, " ")
 	}
+	// The role, model and agent named in it come from the store too.
+	head = neutralise(head)
 	color := turnColor(kind)
 	if it.implicit {
 		// What docker-agent said in the user's place is not the user's turn,
@@ -462,7 +849,7 @@ func sessionBanner(s *session, flag string, paint Paint, width int) []string {
 	// an answer, so below whereFloor the path is dropped and the title takes
 	// the width back. Like the table's floors this one is not owed — a path
 	// short enough to fit whole is drawn whole, however little room there is.
-	title, where := titleOf(s), homeTilde(s.directory)
+	title, where := titleOf(s), neutralise(homeTilde(s.directory))
 	w := max(0, room-min(cells(title), titleFloor)-2)
 	if w < min(cells(where), whereFloor) {
 		w = 0
@@ -510,5 +897,5 @@ func titleOf(s *session) string {
 	if s.title == "" {
 		return "(untitled)"
 	}
-	return s.title
+	return neutralise(s.title)
 }

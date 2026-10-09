@@ -11,8 +11,9 @@
 // Point --root at any checkout: the sessions whose working directory sits inside
 // it are the ones you get.
 //
-// Message bodies are printed exactly as the agent received them. Whatever a
-// bridge prepends to a prompt is body text like any other and is never edited out.
+// Message bodies are printed exactly as the agent received them, except that
+// escape sequences and control characters are made harmless. Whatever a bridge
+// prepends to a prompt is body text like any other and is never edited out.
 //
 // The database is opened read-only; nothing here writes to it.
 //

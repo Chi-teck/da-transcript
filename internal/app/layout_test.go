@@ -208,11 +208,11 @@ func TestWrapANSI(t *testing.T) {
 	}
 }
 
-// A transcript prints message bodies and tool output exactly as they arrived,
-// so it carries escapes it did not write: a hyperlink from a fetch, a
-// colour or a screen clear from a shell call. The layout has to measure those
-// at the nothing the terminal advances for them, or it budgets a line against
-// a width it does not have. sgrSeq answers a narrower question and is left
+// Text from the store is neutralised before it is laid out, but a line that
+// carried escapes it did not write — a hyperlink from a fetch, a colour or a
+// screen clear from a shell call — would still have to be measured at the
+// nothing the terminal advances for them, or it would be budgeted against a
+// width it does not have. sgrSeq answers a narrower question and is left
 // answering it — what a --color always run added, and nothing else.
 func TestVisibleCellsForeignEscapes(t *testing.T) {
 	for _, c := range []struct {
@@ -292,6 +292,36 @@ func TestWrapForeignEscapes(t *testing.T) {
 			if visibleCells(l) > 5 {
 				t.Errorf("wrap(%q) line %q is %d cells", line, l, visibleCells(l))
 			}
+		}
+	}
+}
+
+// Text from the store is printed with its escape sequences gone and its other
+// control characters shown rather than obeyed, each in one cell.
+func TestNeutralise(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"clean text, tab and newline kept", "plain 日本語\tand\nlines", "plain 日本語\tand\nlines"},
+		{"csi", "\x1b[31mred\x1b[0m \x1b[2Jclear", "red clear"},
+		{"osc 8 ended by st", "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\", "link"},
+		{"osc 8 ended by bel", "\x1b]8;;http://x\x07link\x1b]8;;\x07", "link"},
+		{"two-character escape", "\x1bMup", "up"},
+		{"lone esc", "a\x1b b", "a␛ b"},
+		{"nul", "a\x00b", "a␀b"},
+		{"bel", "ding\x07", "ding␇"},
+		{"del", "a\x7fb", "a␡b"},
+		{"crlf", "a\r\nb", "a\nb"},
+		{"lone cr", "10%\r50%", "10%␍50%"},
+		{"c1", "a\u009bb", "a\ufffdb"},
+		{"not utf-8", "a\x9bb", "a\ufffdb"},
+	} {
+		got := neutralise(c.in)
+		if got != c.want {
+			t.Errorf("%s: neutralise(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	for _, r := range []string{"␀", "␍", "␛", "␡", "\ufffd"} {
+		if cells(r) != 1 {
+			t.Errorf("%q is %d cells, want 1", r, cells(r))
 		}
 	}
 }
