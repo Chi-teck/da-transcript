@@ -29,21 +29,21 @@ all projects  all time  4 session(s)
   │       "cmd": "echo hi"
   │     }
   │   out hi
-  │ shell ls /nope                                                                      ERR       1s
+  │ shell ls /nope                                                                    error       1s
   │   in
   │     {
   │       "cmd": "ls /nope"
   │     }
-  │   err
+  │   error
   │     Error executing command: exit status 2
   │     O
   │     … [59 more chars]
-  │ shell uname                                                                         ERR       9s
+  │ shell uname                                                                       error       9s
   │   in
   │     {
   │       "cmd": "uname"
   │     }
-  │   err The user rejected the tool call.
+  │   error The user rejected the tool call.
   │ read_file /proj/logo.png                                                             ok      10s
   │   in
   │     {
@@ -294,28 +294,28 @@ all projects  all time  4 session(s)
   │   out
   │     Error executing command: exec: WaitDelay
   │     … [53 more chars]
-  │ shell dir && echo done                                                              ERR       2s
+  │ shell dir && echo done                                                            error       2s
   │   in
   │     {
   │       "cmd": "dir && echo done"
   │     }
-  │   err
+  │   error
   │     [shell-hint] You are on Windows PowerShe
   │     … [198 more chars]
-  │ shell make test                                                                     ERR      30s
+  │ shell make test                                                                   error      30s
   │   in
   │     {
   │       "cmd": "make test",
   │       "timeout": 30
   │
   │     … [1 more chars]
-  │   err
+  │   error
   │     Command timed out after 30s
   │     Output: ---
   │     … [188 more chars]
-  │ shell ls -la /proj                                                                  ERR       2s
+  │ shell ls -la /proj                                                                error       2s
   │   in ls -la /proj
-  │   err
+  │   error
   │     Error calling tool: invalid character 'l
   │     … [32 more chars]
   │ search_files_content TODO                                                            ok       2s
@@ -377,15 +377,15 @@ all projects  all time  4 session(s)
   │
   │     … [39 more chars]
   │   task agent_task_2 failed
-  │   err model failed: HTTP 429
+  │   error model failed: HTTP 429
   │   task agent_task_3 running [output truncated]
   │   result step 1 of 3 done
-  │ shell sleep 60                                                                      ERR      10s
+  │ shell sleep 60                                                                    error      10s
   │   in
   │     {
   │       "cmd": "sleep 60"
   │     }
-  │   err The tool call was canceled by the user.
+  │   error The tool call was canceled by the user.
 
 
   │ 2026-08-18 09:35:00 • user

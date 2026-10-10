@@ -611,7 +611,7 @@ func TestOneLineAndSummary(t *testing.T) {
 	}
 }
 
-// TestToolOutcome pins when a call shows ERR. is_error is not enough: a shell
+// TestToolOutcome pins when a call shows error. is_error is not enough: a shell
 // command that failed, and a call cancelled while it ran inside a subagent,
 // come back without it, and only their text says what happened.
 func TestToolOutcome(t *testing.T) {
@@ -628,29 +628,29 @@ func TestToolOutcome(t *testing.T) {
 		result     *itemRow
 		want       string
 	}{
-		{"marked an error", "read_file", result(`path "/x" is outside the allowed directories`, true), "ERR"},
-		{"rejected", "shell", result("The user rejected the tool call. Reason: not now", true), "ERR"},
-		{"exit status", "shell", result("Error executing command: exit status 2\nOutput: x", false), "ERR"},
-		{"killed", "shell", result("Error executing command: signal: killed\nOutput: x", false), "ERR"},
-		{"killed, through ACP", "shell", result("Error executing command: signal SIGKILL\nOutput: x", false), "ERR"},
+		{"marked an error", "read_file", result(`path "/x" is outside the allowed directories`, true), "error"},
+		{"rejected", "shell", result("The user rejected the tool call. Reason: not now", true), "error"},
+		{"exit status", "shell", result("Error executing command: exit status 2\nOutput: x", false), "error"},
+		{"killed", "shell", result("Error executing command: signal: killed\nOutput: x", false), "error"},
+		{"killed, through ACP", "shell", result("Error executing command: signal SIGKILL\nOutput: x", false), "error"},
 		{"exited 0, child left running", "shell",
 			result("Error executing command: exec: WaitDelay expired before I/O complete\nOutput: started", false), "ok"},
-		{"timed out", "shell", result("Command timed out after 30s\nOutput: x", false), "ERR"},
-		{"cancelled, the shell's word", "shell", result("Command cancelled", false), "ERR"},
-		{"a hint, then a failure", "shell", result(hint+"Error executing command: exit status 1\nOutput: x", false), "ERR"},
+		{"timed out", "shell", result("Command timed out after 30s\nOutput: x", false), "error"},
+		{"cancelled, the shell's word", "shell", result("Command cancelled", false), "error"},
+		{"a hint, then a failure", "shell", result(hint+"Error executing command: exit status 1\nOutput: x", false), "error"},
 		{"a hint over success", "shell", result(hint+"done", false), "ok"},
 		{"worked", "shell", result("hi", false), "ok"},
-		{"cancelled", "fetch", result("The tool call was canceled by the user.", false), "ERR"},
+		{"cancelled", "fetch", result("The tool call was canceled by the user.", false), "error"},
 		{"cancelled with its batch", "shell", result("The tool call was canceled because another tool call"+
-			" in the same batch was canceled by the user.", false), "ERR"},
+			" in the same batch was canceled by the user.", false), "error"},
 		{"skipped by a hook", "read_file", result("The tool call was skipped because a post_tool_use hook"+
-			" signalled run termination.", false), "ERR"},
+			" signalled run termination.", false), "error"},
 		{"the shell's words from another tool", "read_file", result("Error executing command: exit status 1", false), "ok"},
 		// docker-agent kept the tail of the output, and the failure was at its head.
 		{"a failure over 50 KB", "shell", result("Tool call result was too large (60000 bytes; limit 51200 bytes)."+
 			" The full result is available in a file: /tmp/x\n\nShowing the last 1 lines (up to 51200 bytes):\n\nFAIL", false), "ok"},
 		{"no result", "shell", nil, "no result"},
-		{"no call, marked an error", "", result("Tool 'x' is not available.", true), "ERR"},
+		{"no call, marked an error", "", result("Tool 'x' is not available.", true), "error"},
 		{"no call", "", result("Error executing command: exit status 1", false), "ok"},
 	} {
 		if got := toolOutcome(c.tool, c.result); got != c.want {
@@ -673,18 +673,18 @@ func TestRenderWait(t *testing.T) {
 		want  []string
 	}{
 		{"full", []string{
-			"  err Wait cancelled: context canceled",
+			"  error Wait cancelled: context canceled",
 			"  task t1 completed",
 			"  result all done",
 			"  task t2 failed",
-			"  err model failed",
+			"  error model failed",
 			"  task t3 completed [output truncated]",
 			"  result cut",
 			"  task t4 running",
 			"  result step 1",
 		}},
 		{"compact", []string{
-			"  err Wait cancelled: context canceled",
+			"  error Wait cancelled: context canceled",
 			"  task t1 completed",
 			"  task t2 failed",
 			"  task t3 completed [output truncated]",
@@ -771,7 +771,7 @@ func TestOneLineBodyKeepsItsIndent(t *testing.T) {
 		clock(1)+`"}`)
 
 	got := runArgs(t, d, "", "--tools", "full")
-	for _, want := range []string{"  │   out  M file.go\n", "  │   in   not json\n", "  │   err   boom\n"} {
+	for _, want := range []string{"  │   out  M file.go\n", "  │   in   not json\n", "  │   error   boom\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("transcript lacks %q:\n%s", want, got)
 		}
@@ -1118,7 +1118,7 @@ func TestSessionTagNeutralised(t *testing.T) {
 }
 
 // A wait docker-agent marked an error, for a task it no longer knows, draws
-// its task lines like any other wait rather than its JSON as an err block.
+// its task lines like any other wait rather than its JSON as an error block.
 // And a result left over when one id is answered twice is drawn nameless after
 // the step's calls, not dropped.
 func TestWaitErrorAndSecondAnswer(t *testing.T) {
@@ -1135,8 +1135,8 @@ func TestWaitErrorAndSecondAnswer(t *testing.T) {
 
 	compact, full := runArgs(t, d, ""), runArgs(t, d, "", "--tools", "full")
 	for _, c := range []struct{ name, out, want string }{
-		{"compact", compact, `ERR +1s\n  │   task t9 not_found\n  │ shell echo one +ok +1s\n  │ \? +ok\n`},
-		{"full", full, `ERR +1s\n  │   task t9 not_found\n  │   err Task not found; it may have been pruned\.\n`},
+		{"compact", compact, `error +1s\n  │   task t9 not_found\n  │ shell echo one +ok +1s\n  │ \? +ok\n`},
+		{"full", full, `error +1s\n  │   task t9 not_found\n  │   error Task not found; it may have been pruned\.\n`},
 		{"full", full, `\n  │ \? +ok\n  │   out out two\n`},
 	} {
 		if !regexp.MustCompile(c.want).MatchString(c.out) {

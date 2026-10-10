@@ -101,7 +101,7 @@ func renderWait(content string, opts *options) ([]string, bool) {
 	paint := opts.paint
 	var lines []string
 	if w.Error != "" {
-		lines = append(lines, indentBlock("err", neutralise(string(w.Error)), opts.maxChars, paint, errColor))
+		lines = append(lines, indentBlock("error", neutralise(string(w.Error)), opts.maxChars, paint, errColor))
 	}
 	for _, t := range w.Tasks {
 		state := neutralise(cmp.Or(string(t.TaskID), "?") + " " + cmp.Or(string(t.Status), "?"))
@@ -118,7 +118,7 @@ func renderWait(content string, opts *options) ([]string, bool) {
 			lines = append(lines, indentBlock("result", neutralise(string(t.Output)), opts.maxChars, paint, grey))
 		}
 		if t.Error != "" {
-			lines = append(lines, indentBlock("err", neutralise(string(t.Error)), opts.maxChars, paint, errColor))
+			lines = append(lines, indentBlock("error", neutralise(string(t.Error)), opts.maxChars, paint, errColor))
 		}
 	}
 	return lines, true
@@ -159,15 +159,15 @@ func indentBlock(label, body string, limit int, paint Paint, color int) string {
 
 // outcomeWidth is the right-hand block of a tool line: the mark and the
 // duration together, one column whatever either of them turns out to be.
-const outcomeWidth = 12
+const outcomeWidth = 14
 
 // outcomeCell lays that block out. Fixed fields, so outcome and duration each
-// line up as their own column: ok/ERR sit right-aligned in the first three
+// line up as their own column: ok/error sit right-aligned in the first five
 // cells with the duration after them, and a longer mark such as `no result` is
 // right-aligned over the whole block instead of spilling left into the
 // summary's room.
 func outcomeCell(mark, took string) (markCell, tookCell string) {
-	if cells(mark) > 3 {
+	if cells(mark) > 5 {
 		if took == "" {
 			return fmt.Sprintf("%*s", outcomeWidth, mark), ""
 		}
@@ -177,7 +177,7 @@ func outcomeCell(mark, took string) (markCell, tookCell string) {
 		// wide mark, never has a duration.
 		return fmt.Sprintf("%*s", max(cells(mark), outcomeWidth-1-cells(took)), mark), " " + took
 	}
-	return fmt.Sprintf("%3s", mark), fmt.Sprintf("  %7s", took)
+	return fmt.Sprintf("%5s", mark), fmt.Sprintf("  %7s", took)
 }
 
 // toolDuration is how long a call took, in whole seconds, or "" when it got
@@ -204,7 +204,7 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 		took = toolDuration(called, result)
 	}
 	mark := toolOutcome(name, result)
-	failed := mark == "ERR"
+	failed := mark == "error"
 	markCell, tookCell := outcomeCell(mark, took)
 	right := markCell + tookCell
 
@@ -217,7 +217,7 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 	}
 
 	// The outcome sits at the right margin so a run of calls scans as a column
-	// of ok/ERR; the summary takes what is left between the name and it. Short
+	// of ok/error; the summary takes what is left between the name and it. Short
 	// of room, the summary yields entirely and then the name is cut short,
 	// sooner than either push past the margin. The note never yields: it is the
 	// one thing saying the output is not all there. Only a line too narrow for
@@ -252,7 +252,7 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 	if strings.TrimSpace(tookCell) != "" {
 		tookCell = paint.paint(tookCell, dim)
 	}
-	outcome := paint.paint(markCell, markColor, failed) + tookCell
+	outcome := paint.paint(markCell, markColor) + tookCell
 	lines := []string{padTo(head, outcome, opts.width-bodyIndent)}
 
 	// The output is the result's text, neutralised, and a line naming each image
@@ -301,14 +301,14 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 		case decoded:
 			lines = append(lines, wait...)
 		case failed:
-			lines = append(lines, indentBlock("err", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
+			lines = append(lines, indentBlock("error", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
 		case output != "":
 			lines = append(lines, indentBlock("out", output, opts.maxChars, paint, grey))
 		}
 	case decoded:
 		lines = append(lines, wait...)
 	case failed:
-		lines = append(lines, indentBlock("err", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
+		lines = append(lines, indentBlock("error", cmp.Or(output, "?"), opts.maxChars, paint, errColor))
 	}
 	return lines
 }
@@ -322,7 +322,7 @@ var cancelledCall = []string{
 	"The tool call was skipped because a post_tool_use hook signalled run termination.",
 }
 
-// toolOutcome is the mark a call gets: ok, ERR, or no result when no result
+// toolOutcome is the mark a call gets: ok, error, or no result when no result
 // row answers it — still running, waiting for approval, cut off, or left
 // there; the store does not say which. name is the call's tool, "" for a
 // result no call answers.
@@ -335,8 +335,8 @@ var cancelledCall = []string{
 // back as output, opening with what went wrong (shell.go:formatCommandOutput,
 // after a [shell-hint] paragraph when there is one): an exit status or a
 // signal, a timeout, or the command cancelled. opencode records such a command
-// as completed and oc-transcript shows it ok; it is ERR here so that a failed
-// build or test run stands out. The one exception is WaitDelay, which Go
+// as completed and oc-transcript shows it ok; it is an error here so that a
+// failed build or test run stands out. The one exception is WaitDelay, which Go
 // returns only for a command that exited 0 but left a child holding its output
 // open. A failing command whose output was over 50 KB still reads ok:
 // docker-agent then keeps only the end of it, and the line saying it failed was
@@ -347,7 +347,7 @@ func toolOutcome(name string, result *itemRow) string {
 	}
 	text := string(result.data.Content)
 	if truthy(result.data.IsError) || slices.Contains(cancelledCall, text) {
-		return "ERR"
+		return "error"
 	}
 	if name == "shell" {
 		if strings.HasPrefix(text, "[shell-hint] ") {
@@ -358,7 +358,7 @@ func toolOutcome(name string, result *itemRow) string {
 		const failure = "Error executing command: "
 		if text == "Command cancelled" || strings.HasPrefix(text, "Command timed out after ") ||
 			(strings.HasPrefix(text, failure) && !strings.HasPrefix(text, failure+"exec: WaitDelay expired")) {
-			return "ERR"
+			return "error"
 		}
 	}
 	return "ok"
@@ -751,7 +751,7 @@ func turnEnvelope(head string, body []chunk, color int, opts *options) []string 
 	out = append(out, blank)
 	for i, c := range body {
 		// One blank line between chunks keeps prose, blocks and labels apart; a
-		// run of tool calls stays packed so ok/ERR scan as a column.
+		// run of tool calls stays packed so ok/error scan as a column.
 		if i > 0 && (!c.tool || !body[i-1].tool) {
 			out = append(out, blank)
 		}

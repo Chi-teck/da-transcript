@@ -32,20 +32,20 @@ all projects  all time  4 session(s)
   │       "cmd": "echo hi"
   │     }
   │   out hi
-  │ shell ls /nope                                                                      ERR       1s
+  │ shell ls /nope                                                                    error       1s
   │   in
   │     {
   │       "cmd": "ls /nope"
   │     }
-  │   err
+  │   error
   │     Error executing command: exit status 2
   │     Output: ls: cannot access '/nope': No such file or directory
-  │ shell uname                                                                         ERR       9s
+  │ shell uname                                                                       error       9s
   │   in
   │     {
   │       "cmd": "uname"
   │     }
-  │   err The user rejected the tool call.
+  │   error The user rejected the tool call.
   │ read_file /proj/logo.png                                                             ok      10s
   │   in
   │     {
@@ -322,32 +322,32 @@ all projects  all time  4 session(s)
   │   out
   │     Error executing command: exec: WaitDelay expired before I/O complete
   │     Output: started pid 4242
-  │ shell dir && echo done                                                              ERR       2s
+  │ shell dir && echo done                                                            error       2s
   │   in
   │     {
   │       "cmd": "dir && echo done"
   │     }
-  │   err
+  │   error
   │     [shell-hint] You are on Windows PowerShell 5.1: chain commands with `;`, not `&&` or `||`.
   │     Retry with the corrected syntax.
   │
   │     Error executing command: exit status 1
   │     Output: The token '&&' is not a valid statement separator in this version.
-  │ shell make test                                                                     ERR      30s
+  │ shell make test                                                                   error      30s
   │   in
   │     {
   │       "cmd": "make test",
   │       "timeout": 30
   │     }
-  │   err
+  │   error
   │     Command timed out after 30s
   │     Output: --- FAIL: TestParse (0.00s)
   │             parse_test.go:42: Parse("a, b") kept the space after the comma: got ["a" " b"]
   │     FAIL    example.com/proj/parse  0.012s
   │     ok      example.com/proj/lex    0.003s
-  │ shell ls -la /proj                                                                  ERR       2s
+  │ shell ls -la /proj                                                                error       2s
   │   in ls -la /proj
-  │   err Error calling tool: invalid character 'l' looking for beginning of value
+  │   error Error calling tool: invalid character 'l' looking for beginning of value
   │ search_files_content TODO                                                            ok       2s
   │   in
   │     {
@@ -413,15 +413,15 @@ all projects  all time  4 session(s)
   │       "timeout": 20
   │     }
   │   task agent_task_2 failed
-  │   err model failed: HTTP 429
+  │   error model failed: HTTP 429
   │   task agent_task_3 running [output truncated]
   │   result step 1 of 3 done
-  │ shell sleep 60                                                                      ERR      10s
+  │ shell sleep 60                                                                    error      10s
   │   in
   │     {
   │       "cmd": "sleep 60"
   │     }
-  │   err The tool call was canceled by the user.
+  │   error The tool call was canceled by the user.
   │
   │ tokens 200 in 40 out 12000 cached 0 written $0.0020 tool_calls
 

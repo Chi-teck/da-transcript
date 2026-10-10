@@ -24,12 +24,12 @@ all projects  all time  4 session(s)
   │ I will run tools.
   │
   │ shell echo hi                                                                        ok       0s
-  │ shell ls /nope                                                                      ERR       1s
-  │   err
+  │ shell ls /nope                                                                    error       1s
+  │   error
   │     Error executing command: exit status 2
   │     Output: ls: cannot access '/nope': No such file or directory
-  │ shell uname                                                                         ERR       9s
-  │   err The user rejected the tool call.
+  │ shell uname                                                                       error       9s
+  │   error The user rejected the tool call.
   │ read_file /proj/logo.png                                                             ok      10s
 
 
@@ -216,22 +216,22 @@ all projects  all time  4 session(s)
   │ shell echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く         ok       0s
   │ shell cat build.log                                                                  ok       1s
   │ shell nohup ./server &                                                               ok       1s
-  │ shell dir && echo done                                                              ERR       2s
-  │   err
+  │ shell dir && echo done                                                            error       2s
+  │   error
   │     [shell-hint] You are on Windows PowerShell 5.1: chain commands with `;`, not `&&` or `||`.
   │     Retry with the corrected syntax.
   │
   │     Error executing command: exit status 1
   │     Output: The token '&&' is not a valid statement separator in this version.
-  │ shell make test                                                                     ERR      30s
-  │   err
+  │ shell make test                                                                   error      30s
+  │   error
   │     Command timed out after 30s
   │     Output: --- FAIL: TestParse (0.00s)
   │             parse_test.go:42: Parse("a, b") kept the space after the comma: got ["a" " b"]
   │     FAIL    example.com/proj/parse  0.012s
   │     ok      example.com/proj/lex    0.003s
-  │ shell ls -la /proj                                                                  ERR       2s
-  │   err Error calling tool: invalid character 'l' looking for beginning of value
+  │ shell ls -la /proj                                                                error       2s
+  │   error Error calling tool: invalid character 'l' looking for beginning of value
   │ search_files_content TODO                                                            ok       2s
   │ write_file /proj/notes.md                                                            ok       3s
   │ list_background_jobs                                                                 ok       3s
@@ -241,8 +241,8 @@ all projects  all time  4 session(s)
   │ wait_background_agents ["agent_task_2","agent_task_3"]                               ok      20s
   │   task agent_task_2 failed
   │   task agent_task_3 running [output truncated]
-  │ shell sleep 60                                                                      ERR      10s
-  │   err The tool call was canceled by the user.
+  │ shell sleep 60                                                                    error      10s
+  │   error The tool call was canceled by the user.
 
 
   │ 2026-08-18 09:35:00 • user
