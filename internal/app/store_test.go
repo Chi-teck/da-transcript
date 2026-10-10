@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -433,6 +434,57 @@ func TestItemsCarryTime(t *testing.T) {
 	}
 	if want := time.Date(2026, 10, 8, 5, 0, 0, 123e6, time.UTC).UnixMilli(); times[6] != want {
 		t.Errorf("evaluation time = %d, want %d, to the millisecond", times[6], want)
+	}
+}
+
+// What a --follow round reads: changed names the sessions with a row past an
+// id, and the highest id among those rows; tail reads one session from a
+// position, its first untimed item at the time it is handed, which is the
+// time of the item before it, read in an earlier round.
+func TestChangedAndTail(t *testing.T) {
+	d := newTestDB(t)
+	d.session("a", "", "", "/p", "2026-10-08T09:00:00Z")
+	d.session("b", "", "", "/p", "2026-10-08T09:00:00Z")
+	d.userText("a", "2026-10-08T09:01:00Z", "one")
+	d.userText("b", "2026-10-08T09:02:00Z", "two")
+	st := d.open(t)
+	ctx := context.Background()
+
+	first, err := st.lastID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 2 {
+		t.Fatalf("lastID = %d, want 2", first)
+	}
+	d.userText("a", "2026-10-08T09:03:00Z", "three")
+	d.subsession("a", "b") // untimed
+	touched, last, err := st.changed(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(touched, map[string]bool{"a": true}) || last != 4 {
+		t.Errorf("changed = %v, %d; want a alone, up to 4", touched, last)
+	}
+	if touched, again, err := st.changed(ctx, last); err != nil || len(touched) != 0 || again != last {
+		t.Errorf("changed with nothing new = %v, %d, %v; want none, %d", touched, again, err, last)
+	}
+
+	at := ms(t, "2026-10-08T09:01:00Z")
+	tail, err := st.tail(ctx, "a", 1, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range tail {
+		got = append(got, fmt.Sprint(it.position, " ", it.typ, " ", stamp(it.timeCreated)))
+	}
+	want := []string{"1 message 2026-10-08 09:03:00", "2 subsession 2026-10-08 09:03:00"}
+	if !slices.Equal(got, want) {
+		t.Errorf("tail from 1 = %q, want %q", got, want)
+	}
+	if tail, err := st.tail(ctx, "a", 2, at); err != nil || len(tail) != 1 || tail[0].timeCreated != at {
+		t.Errorf("tail from 2 = %+v, %v; want the subsession row, at the time handed in", tail, err)
 	}
 }
 

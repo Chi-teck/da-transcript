@@ -453,27 +453,36 @@ func TestSessionBannerFlags(t *testing.T) {
 	// about what this particular run of blocks happens to contain — but a
 	// banner for a session already announced answers a nearer question first,
 	// and says so however the window fell.
+	//
+	// A late banner, which only a --follow tail draws, says the most and wins
+	// over all three.
 	for _, c := range []struct {
-		name  string
-		since *int64
-		seen  bool
-		want  string
+		name       string
+		since      *int64
+		seen, late bool
+		want       string
 	}{
-		{"started inside the window", new(int64(50)), false, newFlag},
-		{"started before it", new(int64(200)), false, joinFlag},
-		{"--all: no window to predate", nil, false, newFlag},
-		{"come back to", new(int64(50)), true, backFlag},
-		{"come back to, and older than the window", new(int64(200)), true, backFlag},
+		{"started inside the window", new(int64(50)), false, false, newFlag},
+		{"started before it", new(int64(200)), false, false, joinFlag},
+		{"--all: no window to predate", nil, false, false, newFlag},
+		{"come back to", new(int64(50)), true, false, backFlag},
+		{"come back to, and older than the window", new(int64(200)), true, false, backFlag},
+		{"late, new", new(int64(50)), false, true, lateFlag},
+		{"late, joined", new(int64(200)), false, true, lateFlag},
+		{"late, come back to", new(int64(50)), true, true, lateFlag},
 	} {
-		if got := bannerFlag(s, c.since, c.seen); got != c.want {
+		if got := bannerFlag(s, c.since, c.seen, c.late); got != c.want {
 			t.Errorf("%s: bannerFlag = %q, want %q", c.name, got, c.want)
 		}
+	}
+	if n := cells(lateFlag); n != 1 {
+		t.Errorf("the late flag is %d cells, want 1", n)
 	}
 
 	paint := Paint{}
 	// A banner is its two own lines and no blank rows: the gap around it is the
 	// assembler's.
-	for _, flag := range []string{newFlag, joinFlag, backFlag} {
+	for _, flag := range []string{newFlag, joinFlag, backFlag, lateFlag} {
 		want := " " + flag + " " + tagOpen + "aaaaaa" + tagClose + " Zoo"
 		if got := sessionBanner(s, flag, paint, 40)[0]; !strings.HasPrefix(got, want) {
 			t.Errorf("banner = %q, want prefix %q", got, want)

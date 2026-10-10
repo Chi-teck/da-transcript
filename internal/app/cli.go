@@ -323,7 +323,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	t, err := build(ctx, st, opts)
+	t, err := build(ctx, st, opts, nil, seam{})
 	if err != nil {
 		return err
 	}
@@ -373,6 +373,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if opts.out != "" {
 		_, _ = fmt.Fprintf(stderr, "wrote %s\n", opts.out)
+	}
+
+	if opts.follow {
+		return follow(ctx, st, opts, w, t.cur, t.seam)
 	}
 	return nil
 }

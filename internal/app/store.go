@@ -222,35 +222,114 @@ func (s *store) items(ctx context.Context, sessions []*session) ([]itemRow, erro
 	}
 	slices.Sort(ids)
 	var out []itemRow
-	var cur string // the session prev belongs to
-	var prev int64
 	for chunk := range slices.Chunk(ids, chunkSize) {
-		query := "select id, session_id, position, item_type, coalesce(agent_name, ''), coalesce(implicit, 0)," +
-			" coalesce(subsession_id, ''), message_json, usage_json from session_items" +
-			" where session_id in (" + placeholders(len(chunk)) + ") order by session_id, position"
+		query := itemSelect + " where session_id in (" + placeholders(len(chunk)) + ") order by session_id, position"
 		rows, err := s.db.QueryContext(ctx, query, anySlice(chunk)...)
-		err = scanAll(rows, err, func(rows *sql.Rows) error {
-			var r itemRow
-			var message, usage []byte
-			if err := rows.Scan(&r.id, &r.sessionID, &r.position, &r.typ, &r.agent, &r.implicit,
-				&r.subsession, &message, &usage); err != nil {
-				return err
-			}
-			decodeItem(&r, message, usage)
-			if r.sessionID != cur {
-				cur, prev = r.sessionID, start[r.sessionID]
-			}
-			// A created_at that does not parse is as good as none.
-			if ms, ok := parseStamp(string(r.data.CreatedAt)); ok {
-				prev = ms
-			}
-			r.timeCreated = prev
-			out = append(out, r)
-			return nil
-		})
+		got, err := scanItems(rows, err, func(sid string) int64 { return start[sid] })
 		if err != nil {
 			return nil, err
 		}
+		out = append(out, got...)
+	}
+	return out, nil
+}
+
+// cursor is where a --follow round resumes. Not a position in one global
+// order, as oc-transcript's keyset is: id order is not time order (a
+// subagent's items land in one burst, stamped minutes back), stamps are
+// whole seconds and missing on some items, and a streaming step is rewritten
+// in place under the id it was given at its first chunk. So it is two things:
+// the highest id looked at, which says which sessions have new rows, and for
+// each session how far it has been printed.
+type cursor struct {
+	lastID int64           // every row with an id up to this one has been looked at
+	lanes  map[string]lane // by session id
+}
+
+// lane is how far one session has been printed. What a session printed is
+// always a prefix of its positions, so a round reads it from next on.
+type lane struct {
+	next int64 // the first position neither printed nor skipped
+	at   int64 // the time of the item before next — or the session's start — for an untimed item at next
+	held bool  // the round stopped inside this session, so it is read again whatever changed
+}
+
+// lastID is the highest item id in the store: where the first --follow round
+// starts looking for new rows.
+func (s *store) lastID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, "select coalesce(max(id), 0) from session_items").Scan(&id)
+	return id, err
+}
+
+// changed returns the sessions holding an item past id, and the highest id
+// among those items — id itself when there is none.
+//
+// One statement is one snapshot, and the store has one writer whose ids rise
+// with commit order, so a row committed after it has a higher id than any it
+// returned and is found by the next call. No in (…) list: a session out of
+// scope comes back too, and the caller ignores it.
+func (s *store) changed(ctx context.Context, id int64) (map[string]bool, int64, error) {
+	out := map[string]bool{}
+	last := id
+	rows, err := s.db.QueryContext(ctx,
+		"select session_id, max(id) from session_items where id > ? group by session_id", id)
+	err = scanAll(rows, err, func(rows *sql.Rows) error {
+		var sid string
+		var top int64
+		if err := rows.Scan(&sid, &top); err != nil {
+			return err
+		}
+		out[sid] = true
+		last = max(last, top)
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, last, nil
+}
+
+// tail returns one session's items from position from on, decoded and timed
+// as items() does it, an untimed first one taking at: the time of the item
+// before it, read in an earlier round.
+func (s *store) tail(ctx context.Context, sid string, from, at int64) ([]itemRow, error) {
+	rows, err := s.db.QueryContext(ctx, itemSelect+" where session_id = ? and position >= ? order by position", sid, from)
+	return scanItems(rows, err, func(string) int64 { return at })
+}
+
+// itemSelect is the columns every item query reads, in scanItems' order.
+const itemSelect = "select id, session_id, position, item_type, coalesce(agent_name, ''), coalesce(implicit, 0)," +
+	" coalesce(subsession_id, ''), message_json, usage_json from session_items"
+
+// scanItems drains an item query that hands each session over as one run in
+// position order. Each item is decoded, and one without a timestamp takes the
+// previous item's — a session's first takes start(session).
+func scanItems(rows *sql.Rows, err error, start func(sid string) int64) ([]itemRow, error) {
+	var out []itemRow
+	var cur string // the session prev belongs to
+	var prev int64
+	err = scanAll(rows, err, func(rows *sql.Rows) error {
+		var r itemRow
+		var message, usage []byte
+		if err := rows.Scan(&r.id, &r.sessionID, &r.position, &r.typ, &r.agent, &r.implicit,
+			&r.subsession, &message, &usage); err != nil {
+			return err
+		}
+		decodeItem(&r, message, usage)
+		if r.sessionID != cur {
+			cur, prev = r.sessionID, start(r.sessionID)
+		}
+		// A created_at that does not parse is as good as none.
+		if ms, ok := parseStamp(string(r.data.CreatedAt)); ok {
+			prev = ms
+		}
+		r.timeCreated = prev
+		out = append(out, r)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

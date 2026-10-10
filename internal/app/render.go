@@ -577,26 +577,15 @@ func renderBlock(b block, opts *options) []string {
 			}
 			addText(string(data.Content))
 			if opts.tools != "none" {
-				// A call in the order the model made it, each with the first
-				// result for its id that no call before it took.
-				taken := make([]bool, len(b.results))
+				// A call in the order the model made it, each with its result.
+				paired, rest := b.answers()
 				for i := range data.ToolCalls {
-					call := &data.ToolCalls[i]
-					var result *itemRow
-					for j, r := range b.results {
-						if !taken[j] && r.data.ToolCallID == call.ID {
-							taken[j], result = true, r
-							break
-						}
-					}
-					addTool(renderTool(call, it.timeCreated, result, opts))
+					addTool(renderTool(&data.ToolCalls[i], it.timeCreated, paired[i], opts))
 				}
 				// An id answered twice leaves a result no call is left to
 				// claim. It is drawn without one rather than dropped.
-				for j, r := range b.results {
-					if !taken[j] {
-						addTool(renderTool(nil, 0, r, opts))
-					}
+				for _, r := range rest {
+					addTool(renderTool(nil, 0, r, opts))
 				}
 			}
 			// A step cut off gets no line: docker-agent writes its usage when the
@@ -760,12 +749,15 @@ func turnEnvelope(head string, body []chunk, color int, opts *options) []string 
 
 // The flag on a banner says what that banner is doing with the session named
 // on it: planting it, joining one already under way, or coming back to one the
-// transcript has shown before. Text-presentation code points, not emoji: one
-// cell each, and they take the session's colour rather than the font's.
+// transcript has shown before — or, in a --follow tail, bringing in what is
+// older than something already printed above it. Text-presentation code
+// points, not emoji: one cell each, and they take the session's colour rather
+// than the font's.
 const (
 	newFlag  = "⚑"
 	joinFlag = "⚐"
 	backFlag = "↻"
+	lateFlag = "◷"
 )
 
 // The brackets around a banner's tag. Angle bracket ornaments rather than the
@@ -798,8 +790,15 @@ func ongoing(s *session, since *int64) bool {
 // output, and scrolling is what fetches it. A flag each, and the plain one for
 // a session that starts where it says it does, leaves nothing to be inferred
 // from a tag the reader would first have to remember having seen.
-func bannerFlag(s *session, since *int64, seen bool) string {
+//
+// A late banner says the most: what follows it belongs further up, among what
+// was printed before it — a subagent that ran in the background, a step held
+// while other sessions went on, a session forked with its old stamps. It wins
+// over the rest.
+func bannerFlag(s *session, since *int64, seen, late bool) string {
 	switch {
+	case late:
+		return lateFlag
 	case seen:
 		return backFlag
 	case ongoing(s, since):

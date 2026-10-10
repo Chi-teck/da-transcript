@@ -158,7 +158,7 @@ func TestTally(t *testing.T) {
 	  "usage":{"input_tokens":0,"output_tokens":0,"cached_input_tokens":0,"cached_write_tokens":0}}`)
 	d.userText("none", "2026-10-08T09:00:02+05:00", "hi")
 
-	tr, err := build(context.Background(), d.open(t), &options{all: true, stderr: io.Discard, width: 100})
+	tr, err := build(context.Background(), d.open(t), &options{all: true, stderr: io.Discard, width: 100}, nil, seam{})
 	if err != nil {
 		t.Fatal(err)
 	}
