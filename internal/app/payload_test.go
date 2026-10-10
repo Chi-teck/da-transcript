@@ -64,12 +64,13 @@ func TestDecodeItem(t *testing.T) {
 }
 
 // function.arguments is JSON inside a JSON string. It comes back raw with the
-// model's key order kept, or as a JSON string when it is not JSON, and never
-// as an error.
+// model's key order kept, or as a JSON string of its text when it is not JSON
+// or is a bare JSON string, and never as an error.
 func TestToolArguments(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{`"{\"b\":1,\"a\":\"x\"}"`, `{"b":1,"a":"x"}`},
 		{`"ls -la"`, `"ls -la"`},
+		{`"\"a\\nb\""`, `"\"a\\nb\""`},                                           // a bare JSON string: quotes and escape kept
 		{`"{\"cmd\":\"make && ./run > out"`, `"{\"cmd\":\"make && ./run > out"`}, // malformed; & and > as written
 		{`""`, ""},
 		{`null`, ""},

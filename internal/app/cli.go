@@ -37,7 +37,7 @@ type options struct {
 	color        string
 	list         bool
 	follow       bool
-	interval     float64
+	interval     time.Duration
 	out          string
 
 	paint         Paint
@@ -71,6 +71,14 @@ type usageError struct{ err error }
 
 func (u usageError) Error() string { return u.err.Error() }
 func (u usageError) Unwrap() error { return u.err }
+
+// errInterrupted is a run that Ctrl-C or SIGTERM stopped before it finished:
+// exit status 130, as a shell reports a command killed by SIGINT, and no
+// message, since the user knows why it stopped.
+var errInterrupted = errors.New("interrupted")
+
+// notifyContext is signal.NotifyContext; a test swaps it to interrupt a run.
+var notifyContext = signal.NotifyContext
 
 // defaultDB is where docker-agent keeps its store: <home>/.cagent/session.db
 // on every OS, or under the temp dir when there is no home to find —
@@ -107,6 +115,7 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	var (
 		root, since, until      string
 		everywhere, showVersion bool
+		interval                float64
 		tools                   = &enumFlag{value: "compact", allowed: []string{"compact", "full", "none"}}
 		color                   = &enumFlag{value: "auto", allowed: []string{"auto", "always", "never"}}
 	)
@@ -127,18 +136,18 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	fs.Var(color, "color", "colour sessions in the terminal (auto: on for a tty, off for a pipe or --out)")
 	fs.BoolVar(&opts.list, "list", false, "list matching sessions instead of the transcript, with the span, message count and token total of each")
 	fs.BoolVarP(&opts.follow, "follow", "f", false, "keep printing new turns as they complete")
-	fs.Float64Var(&opts.interval, "interval", 2.0, "--follow poll interval in seconds")
+	fs.Float64Var(&interval, "interval", 2.0, "--follow poll interval in seconds")
 	fs.StringVarP(&opts.out, "out", "o", "", "write to a file instead of stdout")
 	fs.BoolVar(&showVersion, "version", false, "print the version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
-			_, _ = fmt.Fprint(stdout, usage(max(60, terminalWidth(stdout, 100))))
+			_, _ = fmt.Fprint(stdout, usage(min(max(60, terminalWidth(stdout, 100)), 1000)))
 			return nil, err
 		}
 		// A bad flag is a usage problem: the usage goes to stderr, and main
 		// prints the error line under it.
-		_, _ = fmt.Fprint(stderr, usage(max(60, terminalWidth(stderr, 100))))
+		_, _ = fmt.Fprint(stderr, usage(min(max(60, terminalWidth(stderr, 100)), 1000)))
 		return nil, usageError{err}
 	}
 	// --version, like --help, answers and stops; the rest of the line is moot.
@@ -159,10 +168,15 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	// A root of "" is how the rest of this asks for the whole database. The
 	// root is made absolute and not resolved: docker-agent records the
 	// directory as the shell sees it, symlinks included, so a resolved root
-	// would miss a project reached through one.
+	// would miss a project reached through one. A working directory that is
+	// gone is an error, then, not a quiet --everywhere.
 	if !everywhere {
 		if root == "" {
-			root, _ = os.Getwd()
+			wd, err := os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("cannot determine the working directory: %v (try --root or --everywhere)", err)
+			}
+			root = wd
 		}
 		opts.root = expandUser(root)
 		if abs, err := filepath.Abs(opts.root); err == nil {
@@ -171,9 +185,13 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	}
 	opts.db = expandUser(opts.db)
 	opts.out = expandUser(opts.out)
-	if opts.interval <= 0 {
-		return nil, fmt.Errorf("--interval wants a positive number of seconds, got %v", opts.interval)
+	// Under a tenth of a second the poll is a busy loop, and past an hour it is
+	// no tail to speak of; far enough past — or NaN, or Inf — it is no Duration
+	// at all. The test is negated because NaN fails every comparison.
+	if !(interval >= 0.1 && interval <= 3600) {
+		return nil, fmt.Errorf("--interval wants 0.1 to 3600 seconds, got %v", interval)
 	}
+	opts.interval = time.Duration(interval * float64(time.Second))
 	if opts.list && opts.follow {
 		return nil, errors.New("--follow cannot be combined with --list")
 	}
@@ -196,6 +214,17 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 				return nil, err
 			}
 			opts.until = &ms
+			// The window is [since, until): one that ends where it starts, or
+			// before, is empty by construction, not for want of sessions.
+			// A --since left at its default is named as such: --until alone
+			// should not blame a flag that was never typed.
+			if *opts.since >= ms {
+				if !fs.Changed("since") {
+					return nil, fmt.Errorf("--since (default: %s) %s is not before --until %s (try --since)",
+						since, stamp(*opts.since), stamp(ms))
+				}
+				return nil, fmt.Errorf("--since %s is not before --until %s", stamp(*opts.since), stamp(ms))
+			}
 		}
 	}
 
@@ -206,11 +235,13 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 		mode = "never"
 	}
 	opts.paint = Paint{enabled: wantColor(mode, stdout)}
+	// The width is held to 60..1000: the layout needs 60 columns, and COLUMNS
+	// is taken on trust, so a huge one would have every rule drawn that long.
 	if opts.out != "" {
 		// A file has no terminal; COLUMNS still overrides the default.
-		opts.width = max(60, terminalWidth(nil, 100))
+		opts.width = min(max(60, terminalWidth(nil, 100)), 1000)
 	} else {
-		opts.width = max(60, terminalWidth(stdout, 100))
+		opts.width = min(max(60, terminalWidth(stdout, 100)), 1000)
 	}
 	return opts, nil
 }
@@ -247,7 +278,7 @@ func usage(width int) string {
 		}},
 		{"Following", []flagHelp{
 			{"-f, --follow", "keep printing new turns as they complete"},
-			{"--interval SECONDS", "--follow poll interval (default: 2)"},
+			{"--interval SECONDS", "--follow poll interval, 0.1 to 3600 (default: 2)"},
 		}},
 		{"", []flagHelp{
 			{"--version", "print the version and exit"},
@@ -294,28 +325,46 @@ func usage(width int) string {
 // Main is the command: it runs the line it was given and sets the exit status.
 // A command line pflag itself rejects — an unknown flag, a missing value —
 // exits 2, the way argparse does; a flag whose value this package rejects, and
-// every other failure, exits 1.
+// every other failure, exits 1. Ctrl-C or SIGTERM exits 130 without a word,
+// except once --follow is tailing: that is how a tail is meant to end, and it
+// exits 0.
+//
+// An error can hold whatever a path or an argument does — pflag echoes a flag
+// name as typed, a failed write names its file — so it is made harmless here,
+// where every one is printed: on one line for a usage error, and keeping its
+// lines for the rest, where a second line can be a hint.
 func Main() {
 	err := run(os.Args[1:], os.Stdout, os.Stderr)
 	switch {
 	case err == nil:
 	case errors.Is(err, pflag.ErrHelp), errors.Is(err, errVersionPrinted):
+	case errors.Is(err, errInterrupted):
+		os.Exit(130)
 	case errors.As(err, new(usageError)):
-		fmt.Fprintf(os.Stderr, "da-transcript: error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "da-transcript: error: %s\n", neutraliseLine(err.Error()))
 		os.Exit(2)
 	default:
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, neutralise(err.Error()))
 		os.Exit(1)
 	}
 }
 
-func run(args []string, stdout, stderr io.Writer) error {
+func run(args []string, stdout, stderr io.Writer) (err error) {
 	opts, err := parseArgs(args, stdout, stderr)
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// The signal cancels whatever query is running, which then fails with
+	// context canceled or SQLite's interrupted: that is the run stopping as
+	// asked, not a failure to report. Deferred after stop, so it runs first —
+	// stop cancels ctx too.
+	defer func() {
+		if err != nil && ctx.Err() != nil {
+			err = errInterrupted
+		}
+	}()
 
 	st, err := openStore(ctx, opts.db)
 	if err != nil {
@@ -353,11 +402,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(out) == 0 && t.empty != "" {
 		_, _ = fmt.Fprintln(stderr, t.empty)
 	}
+	// With no tail to come, that is all: --out leaves the file system as it
+	// found it, no file made and none truncated for nothing.
+	if len(out) == 0 && !opts.follow {
+		return nil
+	}
 
 	// The tail, when there is one, goes wherever the transcript went.
 	sink, sinkName := stdout, "output"
 	if opts.out != "" {
-		f, err := os.Create(opts.out)
+		// The store is only ever read, but --out truncates what it names: a slip
+		// must not land it on the database or the -wal and -shm beside it.
+		// SameFile sees through symlinks and other spellings of the path.
+		if outInfo, err := os.Stat(opts.out); err == nil {
+			for _, p := range []string{opts.db, opts.db + "-wal", opts.db + "-shm"} {
+				if info, err := os.Stat(p); err == nil && os.SameFile(outInfo, info) {
+					return fmt.Errorf("cannot write %s: it is part of the database being read", opts.out)
+				}
+			}
+		}
+		// The store sits in a private directory and a transcript can carry
+		// whatever the tools saw, so a new file is made readable by its owner
+		// alone. An existing file keeps the mode it has.
+		f, err := os.OpenFile(opts.out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			if pe, ok := errors.AsType[*fs.PathError](err); ok {
 				err = pe.Err
@@ -371,8 +438,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err := writeLines(w, out); err != nil {
 		return fmt.Errorf("cannot write %s: %v", sinkName, err)
 	}
-	if opts.out != "" {
-		_, _ = fmt.Fprintf(stderr, "wrote %s\n", opts.out)
+	// A tail that opens on nothing has written nothing yet.
+	if opts.out != "" && len(out) > 0 {
+		_, _ = fmt.Fprintf(stderr, "wrote %s\n", neutraliseLine(opts.out))
 	}
 
 	if opts.follow {
@@ -386,7 +454,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 func summaryLine(opts *options, used int) string {
 	name := "all projects"
 	if opts.root != "" {
-		name = filepath.Base(opts.root)
+		name = neutraliseLine(filepath.Base(opts.root))
 	}
 	window := "all time"
 	if !opts.all {

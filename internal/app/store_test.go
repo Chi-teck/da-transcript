@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -32,7 +33,7 @@ type testDB struct {
 func newTestDB(t *testing.T) *testDB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "session.db")
-	db, err := sql.Open("sqlite", "file:"+path)
+	db, err := sql.Open("sqlite", "file:"+uriEscape(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,11 +201,79 @@ func TestOpenStoreErrors(t *testing.T) {
 	if err := os.WriteFile(notdb, []byte("just text, no sqlite header at all"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// One line: the -wal and -shm are no fix for a file that is not a database.
 	if _, err := openStore(ctx, notdb); err == nil ||
 		!strings.HasPrefix(err.Error(), fmt.Sprintf("cannot open %s read-only:", notdb)) ||
-		!strings.Contains(err.Error(), "-wal and -shm") {
+		strings.Contains(err.Error(), "\n") {
 		t.Errorf("non-database file: %v", err)
 	}
+	// A path that cannot be reached is not a missing database: the real cause,
+	// and the path once.
+	notdir := filepath.Join(notdb, "session.db")
+	if _, err := openStore(ctx, notdir); err == nil ||
+		err.Error() != fmt.Sprintf("cannot open %s read-only: %v", notdir, syscall.ENOTDIR) {
+		t.Errorf("path through a file: %v", err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads past file modes")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "session.db")
+	if err := os.WriteFile(locked, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := openStore(ctx, locked); err == nil ||
+		err.Error() != fmt.Sprintf("cannot open %s read-only: %v", locked, syscall.EACCES) {
+		t.Errorf("unsearchable directory: %v", err)
+	}
+}
+
+// The second line, on the -wal and -shm, comes when SQLite could not get at
+// them: an unreadable -shm (CANTOPEN), or none and a directory a read-only
+// handle cannot make one in (READONLY_CANTINIT). The writer is closed first:
+// SQLite shares a -shm one handle in the process has open with the next, and
+// would never look at its mode.
+func TestOpenStoreWALHint(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads past file modes")
+	}
+	const hint = "\ndocker-agent uses WAL; the -wal and -shm files next to it must be readable too."
+	check := func(name, path string) {
+		t.Helper()
+		st, err := openStore(context.Background(), path)
+		if err == nil {
+			_ = st.Close()
+			t.Fatalf("%s: opened", name)
+		}
+		if !strings.HasPrefix(err.Error(), fmt.Sprintf("cannot open %s read-only:", path)) ||
+			!strings.HasSuffix(err.Error(), hint) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	d := newTestDB(t)
+	if err := d.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(d.path+"-shm", nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	check("unreadable -shm", d.path)
+
+	d = newTestDB(t)
+	if err := d.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(d.path)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	check("no -shm, read-only directory", d.path)
 }
 
 // A store older than the columns read has to be refused at open, by name,
@@ -230,7 +299,7 @@ func TestOpenStoreTooOld(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.db")
-			db, err := sql.Open("sqlite", "file:"+path)
+			db, err := sql.Open("sqlite", "file:"+uriEscape(path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -312,6 +381,16 @@ func TestSessionScoping(t *testing.T) {
 		if (r.id == "kid" || r.id == "grandkid") && r.directory != root {
 			t.Errorf("%s: directory = %q, want the inherited %q", r.id, r.directory, root)
 		}
+	}
+
+	// The filesystem root ends in the separator already: every session with a
+	// directory is under it, and only the headless one is not.
+	under, err := st.sessions(ctx, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(under) != 13 || slices.ContainsFunc(under, func(r sessionRow) bool { return r.id == "nodir" }) {
+		t.Errorf("rows under / = %v, want all 13 with a directory", under)
 	}
 
 	all, err := st.sessions(ctx, "")

@@ -2,6 +2,7 @@ package app
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,15 +25,20 @@ func TestParseWhen(t *testing.T) {
 		{"45s", false, ms(now.Add(-45 * time.Second))},
 		{"2H", false, ms(now.Add(-2 * time.Hour))},
 		{" 2h ", false, ms(now.Add(-2 * time.Hour))},
+		// The furthest back a relative time reaches, just inside a Duration.
+		{"106751d", false, ms(now.AddDate(0, 0, -106751))},
+		{"2562047h", false, ms(now.Add(-2562047 * time.Hour))},
 		{"today", false, ms(time.Date(2026, 8, 18, 0, 0, 0, 0, loc))},
 		{"today", true, ms(time.Date(2026, 8, 19, 0, 0, 0, 0, loc))},
 		{"yesterday", false, ms(time.Date(2026, 8, 17, 0, 0, 0, 0, loc))},
 		{"yesterday", true, ms(time.Date(2026, 8, 18, 0, 0, 0, 0, loc))},
 		{"2026-08-18", false, ms(time.Date(2026, 8, 18, 0, 0, 0, 0, loc))},
-		// A bare date as --until means the end of that day — but only the
-		// 10-char form.
+		{"20260818", false, ms(time.Date(2026, 8, 18, 0, 0, 0, 0, loc))},
+		// A bare date as --until means the end of that day, in either form; a
+		// time of day, however short, is taken as given.
 		{"2026-08-18", true, ms(time.Date(2026, 8, 19, 0, 0, 0, 0, loc))},
-		{"20260818", true, ms(time.Date(2026, 8, 18, 0, 0, 0, 0, loc))},
+		{"20260818", true, ms(time.Date(2026, 8, 19, 0, 0, 0, 0, loc))},
+		{"20260818T12", true, ms(time.Date(2026, 8, 18, 12, 0, 0, 0, loc))},
 		{"2026-08-18T12:30", false, ms(time.Date(2026, 8, 18, 12, 30, 0, 0, loc))},
 		{"2026-08-18 12:30:05", false, ms(time.Date(2026, 8, 18, 12, 30, 5, 0, loc))},
 		{"2026-08-18T12:30:05.25", false, ms(time.Date(2026, 8, 18, 12, 30, 5, 250e6, loc))},
@@ -55,11 +61,54 @@ func TestParseWhen(t *testing.T) {
 	}
 }
 
+// Across a DST change, s/m/h stay elapsed time and d/w stay calendar days —
+// and no relative spec ever lands after now.
+func TestParseWhenAcrossDST(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utc := func(mo time.Month, d, h, mi int) time.Time { return time.Date(2026, mo, d, h, mi, 0, 0, time.UTC) }
+	// 03:10 CEST, an hour after the clocks sprang from 02:00 to 03:00.
+	spring := utc(3, 29, 1, 10).In(loc)
+	// 02:30 CET, the second pass through 02:00–03:00 after falling back.
+	fall := utc(10, 25, 1, 30).In(loc)
+
+	for _, c := range []struct {
+		now  time.Time
+		spec string
+		want time.Time
+	}{
+		{spring, "30m", spring.Add(-30 * time.Minute)}, // not 03:40, in the future
+		{spring, "2h", spring.Add(-2 * time.Hour)},     // not 01:10 CET, one hour back
+		{spring, "24h", time.Date(2026, 3, 28, 2, 10, 0, 0, loc)},
+		{spring, "1d", time.Date(2026, 3, 28, 3, 10, 0, 0, loc)},
+		{spring, "1.5d", time.Date(2026, 3, 27, 15, 10, 0, 0, loc)},
+		{spring, "0.01d", spring.Add(-864 * time.Second)},
+		{spring, "1w", time.Date(2026, 3, 22, 3, 10, 0, 0, loc)},
+		{fall, "45s", fall.Add(-45 * time.Second)},
+		{fall, "1h", utc(10, 25, 0, 30)}, // 02:30 CEST, not 01:30 CEST two hours back
+		{fall, "24h", time.Date(2026, 10, 24, 3, 30, 0, 0, loc)},
+		{fall, "1d", time.Date(2026, 10, 24, 2, 30, 0, 0, loc)},
+		{fall, "1w", time.Date(2026, 10, 18, 2, 30, 0, 0, loc)},
+	} {
+		got, err := parseWhen(c.spec, false, c.now)
+		if err != nil {
+			t.Errorf("parseWhen(%q) at %s: %v", c.spec, c.now, err)
+			continue
+		}
+		if got != c.want.UnixMilli() {
+			t.Errorf("parseWhen(%q) at %s = %s, want %s",
+				c.spec, c.now, time.UnixMilli(got).In(loc), c.want.In(loc))
+		}
+	}
+}
+
 func TestParseWhenErrors(t *testing.T) {
 	now := time.Date(2026, 8, 18, 15, 4, 5, 0, time.UTC)
 	for _, spec := range []string{
 		"nope", "2026-13-01", "2026-02-30", "2026-0818", "5x", "2026-08-18T25:00",
-		"2026-08-18T12:61", "", "h", "2026-08-18X12:30",
+		"2026-08-18T12:61", "", "h", "2026-08-18X12:30", "-5h", "NaNh", "Infd", "1e400h",
 	} {
 		_, err := parseWhen(spec, false, now)
 		if err == nil {
@@ -67,6 +116,27 @@ func TestParseWhenErrors(t *testing.T) {
 			continue
 		}
 		want := "cannot parse time " + strconv.Quote(spec) + " — use 2h, 30m, 3d, today, yesterday or an ISO timestamp"
+		if err.Error() != want {
+			t.Errorf("parseWhen(%q) error = %q, want %q", spec, err.Error(), want)
+		}
+	}
+}
+
+// A relative time past what a Duration holds is refused, not wrapped round
+// into the future or back to now.
+func TestParseWhenOutOfRange(t *testing.T) {
+	now := time.Date(2026, 8, 18, 15, 4, 5, 0, time.UTC)
+	for _, spec := range []string{
+		"106752d", "110000d", "15251w", "2562048h", "153722868m", "9223372037s",
+		"99999999999999999999h",
+		strings.Repeat("9", 400) + "d", // too long for a float: ParseFloat says Inf
+	} {
+		_, err := parseWhen(spec, false, now)
+		if err == nil {
+			t.Errorf("parseWhen(%q) unexpectedly parsed", spec)
+			continue
+		}
+		want := "cannot parse time " + strconv.Quote(spec) + " — a relative time reaches back 292 years at most"
 		if err.Error() != want {
 			t.Errorf("parseWhen(%q) error = %q, want %q", spec, err.Error(), want)
 		}

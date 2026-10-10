@@ -38,12 +38,61 @@ func TestVersionFromBuildInfo(t *testing.T) {
 			&debug.BuildInfo{Main: debug.Module{Version: "v1.0.0"}},
 			"v1.0.0",
 		},
-		// A checkout build records both, and Main.Version there is a
-		// pseudo-version built around the very same commit.
+		// A checkout build records both. On a tagged commit in a clean tree
+		// Main.Version is the tag, and it has to read as a release does.
+		{
+			"tagged checkout",
+			&debug.BuildInfo{
+				Main: debug.Module{Version: "v1.0.0"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: sha},
+					{Key: "vcs.modified", Value: "false"},
+				},
+			},
+			"v1.0.0",
+		},
+		{
+			"tagged pre-release checkout",
+			&debug.BuildInfo{
+				Main:     debug.Module{Version: "v1.0.0-rc1"},
+				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: sha}},
+			},
+			"v1.0.0-rc1",
+		},
+		// With uncommitted changes the build is not the tag any more.
+		{
+			"dirty tagged checkout",
+			&debug.BuildInfo{
+				Main: debug.Module{Version: "v1.0.0+dirty"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: sha},
+					{Key: "vcs.modified", Value: "true"},
+				},
+			},
+			"e4a3b0062f55+dirty",
+		},
+		// Off a tag Main.Version is a pseudo-version built around the very
+		// same commit, in one of three shapes.
 		{
 			"commit over pseudo-version",
 			&debug.BuildInfo{
 				Main:     debug.Module{Version: "v1.0.1-0.20260820160746-e4a3b0062f55"},
+				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: sha}},
+			},
+			"e4a3b0062f55",
+		},
+		{
+			"commit over untagged pseudo-version",
+			&debug.BuildInfo{
+				Main:     debug.Module{Version: "v0.0.0-20260820160746-e4a3b0062f55"},
+				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: sha}},
+			},
+			"e4a3b0062f55",
+		},
+		{
+			"commit over pre-release pseudo-version",
+			&debug.BuildInfo{
+				Main:     debug.Module{Version: "v1.0.0-rc1.0.20260820160746-e4a3b0062f55"},
 				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: sha}},
 			},
 			"e4a3b0062f55",

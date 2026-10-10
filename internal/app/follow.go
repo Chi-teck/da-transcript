@@ -8,7 +8,8 @@ import (
 )
 
 // follow polls for items newer than what has been printed and appends each
-// block once it is complete — see settledPrefix — until interrupted.
+// block once it is complete — see settledPrefix — until interrupted, or until
+// the store's path no longer names the file it opened.
 //
 // The cursor is the highest item id looked at, which says which sessions have
 // new rows, and how far each session has been printed; each round reads only
@@ -19,7 +20,7 @@ import (
 // from round to round, and the tail goes to the same writer the opening
 // transcript went to — the file when --out was given.
 func follow(ctx context.Context, st *store, opts *options, w *bufio.Writer, cur *cursor, carry seam) error {
-	ticker := time.NewTicker(time.Duration(opts.interval * float64(time.Second)))
+	ticker := time.NewTicker(opts.interval)
 	defer ticker.Stop()
 
 	// A held step is invisible: a transfer_task running for ten minutes and a
@@ -38,6 +39,11 @@ func follow(ctx context.Context, st *store, opts *options, w *bufio.Writer, cur 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+		}
+		// A store gone from its path ends the tail: what was printed is out
+		// already, each round flushing its own.
+		if err := st.unchanged(); err != nil {
+			return err
 		}
 		round, err := build(ctx, st, opts, cur, carry)
 		if err != nil {

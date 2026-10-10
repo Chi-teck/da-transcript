@@ -3,7 +3,11 @@ package app
 // tagFor is the short handle for a session: the tail of its id. Any six
 // characters of a random UUID tell sessions apart; the tail is taken, as
 // oc-transcript does, and --session matches any fragment.
+//
+// The id is store text, printed on a line of its own making, so it is made
+// harmless first and the tail cut from what will be shown.
 func tagFor(sessionID string) string {
+	sessionID = neutraliseLine(sessionID)
 	if r := []rune(sessionID); len(r) > 6 {
 		return string(r[len(r)-6:])
 	}

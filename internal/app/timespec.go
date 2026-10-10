@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,9 +15,10 @@ var relativeSpec = regexp.MustCompile(`(?i)^(\d+(?:\.\d+)?)\s*([smhdw])$`)
 // today/yesterday, or an ISO timestamp, all in the zone `now` carries. `end` marks an --until value, where a bare date means
 // the end of that day rather than its midnight.
 //
-// Relative offsets are wall-clock arithmetic — `24h` ago is the same clock
-// reading yesterday, even across a DST change — so the arithmetic is done on
-// the naive fields in UTC and the result is re-read in the local zone.
+// Seconds, minutes and hours are elapsed time: `30m` is half an hour even
+// across a DST change, where `24h` ago is an hour off yesterday's clock. Days
+// and weeks are calendar arithmetic: `1d` ago is the same clock reading
+// yesterday, and a fraction of a day left over is elapsed time on top.
 func parseWhen(spec string, end bool, now time.Time) (int64, error) {
 	spec = strings.TrimSpace(spec)
 	loc := now.Location()
@@ -27,9 +29,20 @@ func parseWhen(spec string, end bool, now time.Time) (int64, error) {
 			"s": time.Second, "m": time.Minute, "h": time.Hour,
 			"d": 24 * time.Hour, "w": 7 * 24 * time.Hour,
 		}[strings.ToLower(m[2])]
+		// Past 292 years — or Inf, from a digit run too long for a float — the
+		// offset is no Duration at all, and the conversion would wrap. The test
+		// is negated because NaN fails every comparison.
+		ns := n * float64(unit)
+		if !(ns < math.MaxInt64) {
+			return 0, fmt.Errorf("cannot parse time %s — a relative time reaches back 292 years at most", strconv.Quote(spec))
+		}
 		// Microsecond precision, like timedelta(seconds=n).
-		delta := time.Duration(n*float64(unit)/float64(time.Microsecond)) * time.Microsecond
-		return rezone(naive(now).Add(-delta), loc).UnixMilli(), nil
+		delta := time.Duration(ns/float64(time.Microsecond)) * time.Microsecond
+		day := 24 * time.Hour
+		if unit < day {
+			return now.Add(-delta).UnixMilli(), nil
+		}
+		return now.AddDate(0, 0, -int(delta/day)).Add(-(delta % day)).UnixMilli(), nil
 	}
 
 	y, mo, d := now.Date()
@@ -46,40 +59,25 @@ func parseWhen(spec string, end bool, now time.Time) (int64, error) {
 		return time.Date(y, mo, d-1, 0, 0, 0, 0, loc).UnixMilli(), nil
 	}
 
-	t, ok := parseISO(spec, loc)
+	t, dateOnly, ok := parseISO(spec, loc)
 	if !ok {
 		return 0, fmt.Errorf("cannot parse time %s — use 2h, 30m, 3d, today, yesterday or an ISO timestamp", strconv.Quote(spec))
 	}
 	// A bare date as --until means the end of that day, not its midnight.
-	if end && len(spec) == 10 {
+	if end && dateOnly {
 		t = t.AddDate(0, 0, 1)
 	}
 	return t.UnixMilli(), nil
 }
 
-// naive returns the wall-clock fields of t as a UTC instant, so durations can
-// be added without the zone getting a say.
-func naive(t time.Time) time.Time {
-	y, mo, d := t.Date()
-	h, mi, s := t.Clock()
-	return time.Date(y, mo, d, h, mi, s, t.Nanosecond(), time.UTC)
-}
-
-// rezone reads the wall-clock fields of t in loc.
-func rezone(t time.Time, loc *time.Location) time.Time {
-	y, mo, d := t.Date()
-	h, mi, s := t.Clock()
-	return time.Date(y, mo, d, h, mi, s, t.Nanosecond(), loc)
-}
-
 // parseISO accepts what datetime.fromisoformat does in practice: a date, with
 // or without a time separated by T or a space, optional seconds, optional
 // fraction, optional offset (Z, ±HH:MM, ±HHMM, ±HH). A value without an offset
-// is local time.
-func parseISO(spec string, loc *time.Location) (time.Time, bool) {
+// is local time. dateOnly reports that no time of day was given.
+func parseISO(spec string, loc *time.Location) (t time.Time, dateOnly, ok bool) {
 	m := isoSpec.FindStringSubmatch(spec)
 	if m == nil {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
 	y, mo, d := atoi(m[1]), atoi(m[2]), atoi(m[3])
 	if m[4] != "" {
@@ -87,7 +85,7 @@ func parseISO(spec string, loc *time.Location) (time.Time, bool) {
 	}
 	h, mi, s := atoi(m[7]), atoi(m[8]), atoi(m[9])
 	if mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || s > 59 {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
 	ns := 0
 	if m[10] != "" {
@@ -110,12 +108,12 @@ func parseISO(spec string, loc *time.Location) (time.Time, bool) {
 			om = atoi(digits[2:])
 		}
 		if oh > 23 || om > 59 {
-			return time.Time{}, false
+			return time.Time{}, false, false
 		}
 		zone = time.FixedZone("", sign*(oh*3600+om*60))
 	}
-	t := time.Date(y, time.Month(mo), d, h, mi, s, ns, zone)
-	return t, t.Day() == d // a normalised day means the date was not real
+	t = time.Date(y, time.Month(mo), d, h, mi, s, ns, zone)
+	return t, m[7] == "", t.Day() == d // a normalised day means the date was not real
 }
 
 // A date in extended or basic form (never mixed), an optional time (T or

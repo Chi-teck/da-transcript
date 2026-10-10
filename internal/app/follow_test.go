@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -117,6 +121,15 @@ func (d *testDB) whole(parent, id, created string, items ...string) {
 			parent, parent, id)
 	}
 	if err := tx.Commit(); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
+// retitle sets a session's title: docker-agent names a subagent by how it was
+// run, "Transferred task", "Background agent task" or "Skill: <name>".
+func (d *testDB) retitle(id, title string) {
+	d.t.Helper()
+	if _, err := d.db.Exec("update sessions set title = ? where id = ?", title, id); err != nil {
 		d.t.Fatal(err)
 	}
 }
@@ -274,12 +287,13 @@ func TestFollowExactlyOnce(t *testing.T) {
 	d.userText("ses_b", clock(0), "pre-1")
 
 	var stdout, stderr bytes.Buffer
-	opts, err := parseArgs([]string{"--db", d.path, "--everywhere", "--all", "--follow", "--interval", "0.02"},
+	opts, err := parseArgs([]string{"--db", d.path, "--everywhere", "--all", "--follow"},
 		&stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts.stderr = &stderr
+	opts.interval = 20 * time.Millisecond // under --interval's floor, for many polls in a short run
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -499,6 +513,7 @@ func TestFollowTransferBurst(t *testing.T) {
 		t.Fatalf("held = %+v, want the transfer_task", opening.held)
 	}
 	d.whole("ses_p", "bg_kid", clock(2), userJSON(clock(2), "bg-task"), stepJSON(clock(3), "bg-answer"))
+	d.retitle("bg_kid", "Background agent task")
 	d.item("ses_p", "evaluation", `{"id":"e1","evaluator":"judge","created_at":"2026-08-18T12:00:03.5Z"}`)
 	for range 2 {
 		if r := f.round(); !waiting(r) {
@@ -534,6 +549,70 @@ func TestFollowTransferBurst(t *testing.T) {
 	}
 	if got, want := heads(f.stream), heads(onePass(t, d, roundOpts(t, d))); !slices.Equal(got, want) {
 		t.Errorf("heads drawn:\n%s\n\nnot one pass's:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestFollowTransferChildWaits: a transfer_task's subagent and its marker land
+// a moment before the call's result — seconds, with hooks — and a poll can
+// fall in between, the opening included. The subagent waits for the step that
+// called it, and the stream is what one pass over the finished fixture
+// prints. A forked skill's subagent is written the same way.
+func TestFollowTransferChildWaits(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	for _, title := range []string{"Transferred task", "Skill: review"} {
+		for _, opening := range []bool{false, true} {
+			d := newTestDB(t)
+			d.session("ses_p", "", "P", "/p", clock(0))
+			d.userText("ses_p", clock(0), "delegate")
+			d.step("ses_p", clock(1), "", callJSON("c1", "transfer_task", `{"agent":"helper","task":"look it up"}`))
+			burst := func() {
+				d.whole("ses_p", "tr_kid", clock(4), userJSON(clock(4), "look it up"), stepJSON(clock(20), "tr-answer"))
+				d.retitle("tr_kid", title)
+			}
+			if opening {
+				burst()
+			}
+			f := &tailer{t: t, st: d.open(t), opts: roundOpts(t, d, "--follow")}
+			if r := f.round(); len(r.held) != 1 || r.held[0].what != "transfer_task" {
+				t.Fatalf("%s, opening %v: held = %+v, want the transfer_task", title, opening, r.held)
+			}
+			if !opening {
+				burst()
+			}
+			f.round()
+			if out := strings.Join(f.stream, "\n"); strings.Contains(out, "tr-answer") {
+				t.Errorf("%s, opening %v: the subagent came out before the step that called it:\n%s", title, opening, out)
+			}
+			d.toolResult("ses_p", "c1", clock(21), "found it")
+			f.round()
+			if want := onePass(t, d, roundOpts(t, d)); !slices.Equal(f.stream, want) {
+				t.Errorf("%s, opening %v: rounds:\n%s\n\nnot one pass:\n%s",
+					title, opening, strings.Join(f.stream, "\n"), strings.Join(want, "\n"))
+			}
+		}
+	}
+}
+
+// TestFollowSameSecond: a subagent's last step and its parent's next one share
+// a second, the parent's written a round later. The round already printed the
+// subagent's, and one pass puts it first too, by id; the stream is what one
+// pass prints. The subagent's session sorting first changes nothing.
+func TestFollowSameSecond(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("zz_par", "", "P", "/p", clock(0))
+	d.userText("zz_par", clock(0), "delegate")
+	d.step("zz_par", clock(0), "", callJSON("c1", "transfer_task", `{"agent":"helper","task":"look it up"}`))
+	f := &tailer{t: t, st: d.open(t), opts: roundOpts(t, d, "--follow")}
+	f.round()
+	d.whole("zz_par", "aa_kid", clock(0), userJSON(clock(0), "look it up"), stepJSON(clock(4), "tr-answer"))
+	d.retitle("aa_kid", "Transferred task")
+	d.toolResult("zz_par", "c1", clock(4), "found it")
+	f.round()
+	d.step("zz_par", clock(4), "parent-next")
+	f.round()
+	if want := onePass(t, d, roundOpts(t, d)); !slices.Equal(f.stream, want) {
+		t.Errorf("rounds:\n%s\n\nnot one pass:\n%s", strings.Join(f.stream, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -621,6 +700,77 @@ func TestFollowLateResult(t *testing.T) {
 	f.round()
 	if n := orphans(f.stream); n != 1 {
 		t.Errorf("a result after its step was skipped drawn %d times, want once:\n%s", n, strings.Join(f.stream, "\n"))
+	}
+}
+
+// TestFollowResultPastHold: a step whose result lies past a held step waits
+// with it. Drawn at once, with its result, it would leave the result in the
+// held tail, to be read again and drawn a second time as one no call answers.
+// A late result, whose step an earlier round drew, is still drawn once.
+// docker-agent writes no result after a later step.
+func TestFollowResultPastHold(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("ses_a", "", "A", "/p", clock(0))
+	d.userText("ses_a", clock(0), "go")
+	d.step("ses_a", clock(1), "", callJSON("c1", "shell", `{"cmd":"date"}`))
+	live := d.streaming("ses_a", "weighing the")
+	d.toolResult("ses_a", "c1", clock(2), "Tue")
+	f := &tailer{t: t, st: d.open(t), opts: roundOpts(t, d, "--follow")}
+	if opening := f.round(); len(opening.held) != 1 || opening.held[0].itemID != live {
+		t.Fatalf("held = %+v, want the step being written", opening.held)
+	}
+	f.round()
+	d.rewrite(live, stepJSON(clock(5), "the answer"))
+	f.round()
+	f.round()
+	if want := onePass(t, d, roundOpts(t, d)); !slices.Equal(f.stream, want) {
+		t.Errorf("rounds:\n%s\n\nnot one pass:\n%s", strings.Join(f.stream, "\n"), strings.Join(want, "\n"))
+	}
+
+	d.step("ses_a", clock(10), "", callJSON("c2", "shell", `{"cmd":"sleep 20"}`))
+	d.userText("ses_a", clock(11), "never mind")
+	live = d.streaming("ses_a", "weighing again")
+	f.round()
+	d.toolResult("ses_a", "c2", clock(12), "woke")
+	f.round()
+	d.rewrite(live, stepJSON(clock(13), "the second answer"))
+	f.round()
+	f.round()
+	if n := strings.Count(strings.Join(f.stream, "\n"), headSep+"tool"); n != 1 {
+		t.Errorf("a late result past a held step drawn %d times, want once:\n%s", n, strings.Join(f.stream, "\n"))
+	}
+}
+
+// TestFollowStreamingAtWindowEdge pins a known limit: a step read while it
+// streams has no stamp yet and counts at the time of the item before it, so a
+// prompt older than --since takes the step out of the tail even when it started
+// streaming inside the window, and its result is drawn alone. One pass made once
+// the step has ended draws the step with its call.
+func TestFollowStreamingAtWindowEdge(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("ses_a", "", "A", "/p", clock(-10))
+	d.userText("ses_a", clock(-10), "go")
+	since := new(ms(t, clock(0)))
+	opts := roundOpts(t, d, "--follow")
+	opts.all, opts.since = false, since
+	f := &tailer{t: t, st: d.open(t), opts: opts}
+	f.round()
+	live := d.streaming("ses_a", "weighing the")
+	f.round()
+	d.rewrite(live, stepJSON(clock(8), "weighing the options", callJSON("c1", "shell", `{"cmd":"ls"}`)))
+	d.toolResult("ses_a", "c1", clock(9), "a.txt")
+	f.round()
+	f.round()
+	if out := strings.Join(f.stream, "\n"); strings.Contains(out, "weighing") || strings.Count(out, headSep+"tool") != 1 {
+		t.Errorf("want the step skipped and its result drawn alone, once:\n%s", out)
+	}
+	batch := roundOpts(t, d)
+	batch.all, batch.since = false, since
+	if out := strings.Join(onePass(t, d, batch), "\n"); !strings.Contains(out, "weighing the options") ||
+		strings.Contains(out, headSep+"tool") {
+		t.Errorf("want one pass to draw the step with its call:\n%s", out)
 	}
 }
 
@@ -741,6 +891,145 @@ func TestFollowWindow(t *testing.T) {
 	batch.all, batch.since = false, since
 	if got, want := heads(f.stream), heads(onePass(t, d, batch)); !slices.Equal(got, want) {
 		t.Errorf("heads drawn:\n%s\n\nnot one pass's:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestFollowJoinFlag: a session's first banner can come rounds after the
+// opening skipped its start as older than --since, and the lane remembers the
+// skip, so the banner is flagged as one pass flags it. A tab opened before the
+// window and first prompted mid-tail skipped nothing and begins here.
+func TestFollowJoinFlag(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("ses_a", "", "A", "/p", clock(0))
+	d.userText("ses_a", clock(5), "hello")
+	d.session("ses_t", "", "T", "/p", clock(-3600))
+	d.session("ses_w", "", "W", "/p", clock(-900))
+	d.userText("ses_w", clock(-900), "early")
+	d.step("ses_w", clock(-899), "early answer")
+	since := new(ms(t, clock(0)))
+	opts := roundOpts(t, d, "--follow")
+	opts.all, opts.since = false, since
+	f := &tailer{t: t, st: d.open(t), opts: opts}
+	f.round()
+
+	d.userText("ses_t", clock(60), "first prompt")
+	d.userText("ses_w", clock(70), "back again")
+	out := strings.Join(f.round().lines, "\n")
+	for _, want := range []string{newFlag + " " + tagOpen + "ses_t" + tagClose, joinFlag + " " + tagOpen + "ses_w" + tagClose} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q:\n%s", want, out)
+		}
+	}
+	batch := roundOpts(t, d)
+	batch.all, batch.since = false, since
+	if got, want := f.stream, onePass(t, d, batch); !slices.Equal(got, want) {
+		t.Errorf("stream:\n%s\n\nnot one pass's:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// signalWriter is a sink that tells the test each time the tail writes to it.
+type signalWriter struct {
+	bytes.Buffer
+	wrote chan struct{}
+}
+
+func (w *signalWriter) Write(p []byte) (int, error) {
+	n, err := w.Buffer.Write(p)
+	select {
+	case w.wrote <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+// TestFollowStoreGone: the connection holds the file it opened, so a store
+// removed from under the tail, or removed and made anew at its path — the data
+// dir wiped, a backup put back — would go on being read as it was, silently,
+// and the new store's ids start again below the cursor besides. The tail ends
+// with an error instead, what it printed before that already out.
+func TestFollowStoreGone(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	remove := func(t *testing.T, path string) {
+		t.Helper()
+		for _, p := range []string{path, path + "-wal", path + "-shm"} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, c := range []struct {
+		name string
+		gone func(t *testing.T, d *testDB) // what becomes of the store mid-tail
+		want string                        // the error; %s is the path
+	}{
+		{"removed", func(t *testing.T, d *testDB) { remove(t, d.path) }, "%s was removed while following"},
+		{"replaced", func(t *testing.T, d *testDB) {
+			n := newTestDB(t)
+			n.session("ses_a", "", "A", "/p", clock(0))
+			n.userText("ses_a", clock(5), "after")
+			// Closed, so its WAL is folded in and the file is the whole store.
+			if err := n.db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			remove(t, d.path)
+			if err := os.Rename(n.path, d.path); err != nil {
+				t.Fatal(err)
+			}
+		}, "%s was replaced while following (run again to follow the new one)"},
+		// Whether the path still names the store cannot be told: that ends the
+		// tail as any other failure to read the store does.
+		{"unreadable", func(t *testing.T, d *testDB) {
+			dir := filepath.Dir(d.path)
+			if err := os.Chmod(dir, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		}, "cannot read %s: permission denied"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.name == "unreadable" && os.Geteuid() == 0 {
+				t.Skip("root reads past file modes")
+			}
+			d := newTestDB(t)
+			d.session("ses_a", "", "A", "/p", clock(0))
+			d.userText("ses_a", clock(0), "before")
+			opts := roundOpts(t, d, "--follow")
+			opts.interval = 20 * time.Millisecond
+			st := d.open(t)
+			opening, err := build(context.Background(), st, opts, nil, seam{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sink := &signalWriter{wrote: make(chan struct{}, 1)}
+			followErr := make(chan error, 1)
+			go func() { followErr <- follow(ctx, st, opts, bufio.NewWriter(sink), opening.cur, opening.seam) }()
+
+			// A round prints this before the store goes.
+			d.userText("ses_a", clock(1), "during")
+			select {
+			case <-sink.wrote:
+			case <-time.After(5 * time.Second):
+				cancel()
+				t.Fatalf("the tail printed nothing while the store was there: err %v", <-followErr)
+			}
+			c.gone(t, d)
+			select {
+			case err = <-followErr:
+			case <-time.After(5 * time.Second):
+				cancel()
+				t.Fatalf("still following what the path named at the start: err %v", <-followErr)
+			}
+			if want := fmt.Sprintf(c.want, d.path); err == nil || err.Error() != want {
+				t.Errorf("err %v, want %q", err, want)
+			}
+			if out := sink.String(); strings.Count(out, "during") != 1 || strings.Contains(out, "after") {
+				t.Errorf("printed:\n%s\nwant the row from before the store went, once", out)
+			}
+		})
 	}
 }
 

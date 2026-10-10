@@ -16,12 +16,15 @@ builds:
   # CGO_ENABLED=0 is the documented build: modernc.org/sqlite is pure Go, so
   # every target below cross-compiles from the Linux runner and the binaries
   # stay static. -trimpath keeps the build machine's paths out of them.
+  # The version is stamped as v{{ .Version }}, the v1.0.0 that `go install` and
+  # a `go build` at the tag print; {{ .Tag }} would say the same in a release,
+  # but in a --snapshot it is the last tag, not the commit being built.
   - env:
       - 'CGO_ENABLED=0'
     goos: ['linux', 'darwin']
     goarch: ['amd64', 'arm64']
     flags: ['-trimpath']
-    ldflags: ['-s -w', '-X github.com/Chi-teck/da-transcript/internal/app.version={{ .Version }}']
+    ldflags: ['-s -w', '-X github.com/Chi-teck/da-transcript/internal/app.version=v{{ .Version }}']
 
 archives:
   - formats: ['tar.gz']
@@ -34,11 +37,6 @@ checksum:
 changelog:
   use: 'github'
   sort: 'asc'
-  filters:
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
 
 release:
   # A tag carrying a pre-release suffix (v1.0.0-rc1) is published as one.

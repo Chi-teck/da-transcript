@@ -193,27 +193,63 @@ func TestBlocksZoo(t *testing.T) {
 	}
 }
 
-// The merge takes the lane whose next block is earliest, then the earlier
-// session, then the lower id, and never reorders a lane: A's 20 after its 30
-// stays there, where a sort would have put it before B's 25.
+// The merge takes the lane whose next block is earliest, then one whose time
+// is borrowed, then the lower id, and never reorders a lane: A's 20 after its
+// 30 stays there, where a sort would have put it before B's 25.
 func TestMerge(t *testing.T) {
-	byID := map[string]*session{}
-	for id, created := range map[string]int64{"a": 1000, "b": 2000, "c": 2000, "d": 500} {
-		byID[id] = &session{sessionRow: sessionRow{id: id, timeCreated: created}}
-	}
-	lane := func(sid string, times ...int64) []block {
+	lane := func(sid string, heads ...itemRow) []block {
 		var out []block
-		for _, at := range times {
-			out = append(out, block{head: &itemRow{sessionID: sid, timeCreated: at}})
+		for i := range heads {
+			heads[i].sessionID = sid
+			out = append(out, block{head: &heads[i]})
 		}
 		return out
 	}
-	merged := merge([][]block{lane("a", 10, 30, 20), lane("b", 25, 40), lane("c", 40), lane("d", 40)}, byID)
+	at := func(ms, id int64) itemRow { return itemRow{id: id, timeCreated: ms} }
+	borrowed := at(40, 9)
+	borrowed.borrowed = true
+	merged := merge([][]block{lane("a", at(10, 1), at(30, 4), at(20, 5)), lane("b", at(25, 3), at(40, 8)),
+		lane("c", at(40, 6)), lane("d", borrowed)})
 	var got []string
 	for _, b := range merged {
 		got = append(got, fmt.Sprint(b.head.sessionID, b.head.timeCreated))
 	}
-	if want := "a10 b25 a30 a20 d40 b40 c40"; strings.Join(got, " ") != want {
+	if want := "a10 b25 a30 a20 d40 c40 b40"; strings.Join(got, " ") != want {
 		t.Errorf("merged = %s, want %s", strings.Join(got, " "), want)
+	}
+}
+
+// TestMergeSameSecond: a subagent run whole inside its parent's seconds — its
+// session started in the second of the parent's, and sorting first by id. Each
+// item lands where it was written: the subagent below the prompt and the step
+// that called it, its marker ahead of it rather than inside its run, which
+// borrows the step's second, and its last step above the parent's next one.
+func TestMergeSameSecond(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("zz_par", "", "P", "/p", clock(0))
+	d.userText("zz_par", clock(0), "the-prompt")
+	d.step("zz_par", clock(0), "", callJSON("c1", "transfer_task", `{"agent":"helper","task":"look it up"}`))
+	d.whole("zz_par", "aa_kid", clock(0), userJSON(clock(0), "kid-task"), stepJSON(clock(0), "kid-first"),
+		stepJSON(clock(5), "kid-last"))
+	d.retitle("aa_kid", "Transferred task")
+	d.toolResult("zz_par", "c1", clock(5), "found it")
+	d.step("zz_par", clock(5), "parent-next")
+
+	out := strings.Join(onePass(t, d, roundOpts(t, d)), "\n")
+	last := -1
+	for _, want := range []string{
+		"the-prompt", "transfer_task", "session " + tagOpen + "aa_kid↓" + tagClose,
+		newFlag + " " + tagOpen + "aa_kid↓" + tagClose, "kid-task", "kid-first", "kid-last", "parent-next",
+	} {
+		i := strings.Index(out, want)
+		if i < 0 || i < last {
+			t.Errorf("%q missing or out of order (at %d, after %d):\n%s", want, i, last, out)
+		}
+		last = i
+	}
+	// Two sessions, three runs: the parent, the subagent whole, the parent.
+	if n := strings.Count(out, tagOpen+"aa_kid↓"+tagClose+" Transferred task"); n != 1 {
+		t.Errorf("subagent banner drawn %d times, want once:\n%s", n, out)
 	}
 }

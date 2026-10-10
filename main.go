@@ -12,8 +12,9 @@
 // it are the ones you get.
 //
 // Message bodies are printed exactly as the agent received them, except that
-// an attached file or binary data is named rather than quoted, and escape
-// sequences and control characters are made harmless. Whatever a bridge
+// an attached file or binary data is named rather than quoted, escape
+// sequences, control characters and invisible format characters are made
+// harmless, and tabs are expanded to 8-column stops. Whatever a bridge
 // prepends to a prompt is body text like any other and is never edited out.
 //
 // The database is opened read-only; nothing here writes to it.

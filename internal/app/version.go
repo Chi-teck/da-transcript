@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"regexp"
 	"runtime/debug"
 )
 
@@ -16,10 +17,11 @@ var version string
 var errVersionPrinted = errors.New("version printed")
 
 // buildVersion names the build as well as it can be named. A release says its
-// tag; a `go build` inside a checkout says the commit it came from, marked
-// +dirty when the tree had uncommitted changes; a `go install …@version` says
-// the module version it was served as; a build from an unpacked source tree,
-// with neither to read, can only say "unknown".
+// tag, and so does a clean `go build` of the tagged commit; any other
+// `go build` inside a checkout says the commit it came from, marked +dirty
+// when the tree had uncommitted changes; a `go install …@version` says the
+// module version it was served as; a build from an unpacked source tree, with
+// neither to read, can only say "unknown".
 func buildVersion() string {
 	if version != "" {
 		return version
@@ -32,10 +34,13 @@ func buildVersion() string {
 }
 
 // versionFromBuildInfo reads the build back out of what the toolchain recorded.
-// The commit comes first because it is the narrower answer: a checkout build
-// records both, and there Main.Version is a pseudo-version built around that
-// same commit. Only an install by module path — `go install …@latest` — has a
-// version and no VCS to have taken it from.
+// A checkout build records both a commit and a Main.Version taken from it. On
+// a tagged commit in a clean tree that version is the tag, the name a release
+// and `go install …@tag` give the same code, so it wins. Anywhere else it is a
+// pseudo-version (or the tag with +dirty) built around that same commit, and
+// the commit comes first because it is the narrower answer. Only an install by
+// module path — `go install …@latest` — has a version and no VCS to have taken
+// it from.
 func versionFromBuildInfo(info *debug.BuildInfo) string {
 	var revision, dirty string
 	for _, s := range info.Settings {
@@ -56,8 +61,21 @@ func versionFromBuildInfo(info *debug.BuildInfo) string {
 		}
 		return "unknown"
 	}
+	if v := info.Main.Version; dirty == "" && v != "" && v != "(devel)" && !pseudoVersion.MatchString(v) {
+		return v
+	}
 	if len(revision) > 12 {
 		revision = revision[:12]
 	}
 	return revision + dirty
 }
+
+// pseudoVersion is golang.org/x/mod/module's pattern for the three shapes the
+// toolchain gives a commit no tag names, +dirty or other build metadata
+// allowed after any of them:
+//
+//	vX.0.0-yyyymmddhhmmss-abcdefabcdef          no tag below it
+//	vX.Y.Z-pre.0.yyyymmddhhmmss-abcdefabcdef    past the pre-release vX.Y.Z-pre
+//	vX.Y.(Z+1)-0.yyyymmddhhmmss-abcdefabcdef    past the release vX.Y.Z
+var pseudoVersion = regexp.MustCompile(
+	`^v[0-9]+\.(0\.0-|\d+\.\d+-([^+]*\.)?0\.)\d{14}-[A-Za-z0-9]+(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)

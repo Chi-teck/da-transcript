@@ -84,7 +84,7 @@ func scope(ctx context.Context, st *store, opts *options) (all, wanted []*sessio
 		if opts.root == "" {
 			return nil, nil, "This database has no sessions at all.", nil
 		}
-		return nil, nil, fmt.Sprintf("No docker-agent session has ever run under %s — try --root or --everywhere.", opts.root), nil
+		return nil, nil, fmt.Sprintf("No docker-agent session has ever run under %s — try --root or --everywhere.", neutraliseLine(opts.root)), nil
 	}
 	all = tagSessions(rows)
 
@@ -142,8 +142,24 @@ func blocks(items []itemRow) []block {
 
 // merge interleaves the sessions' lanes, each one session's blocks in position
 // order, into one stream: at each step, the lane whose next block sorts first
-// by the block's time, then its session's start, then the session id. Position
-// never decides, since a lane offers one block at a time.
+// by the block's time, then by which was written first. Position never
+// decides, since a lane offers one block at a time.
+//
+// Stamps are whole seconds, so ties between sessions are common, and the id —
+// global insertion order — is what breaks them: a subagent's first item can
+// share the second of its parent's prompt, and its last item the second of
+// the parent's next step, and the id puts each where it was written. Ordering
+// by the sessions instead would put one session first in both, with the
+// subagent above the prompt or the parent's next step inside the subagent's
+// run. --follow agrees: a round reads what was written after what earlier
+// rounds printed, and in a tie the id puts it after them too.
+//
+// A block whose time is borrowed from the item before it is the exception: it
+// goes first in its second, right behind that item. Its id is no guide — a
+// subagent's marker is written after the subagent's whole run, and by id would
+// cut the run in two at the second its time came from. The price: one read a
+// round after another session printed in its second comes out behind that,
+// where one pass puts it ahead.
 //
 // A merge and not a sort, because a session's order is its positions and has
 // to survive whatever its stamps say. They rarely go backwards, but they can:
@@ -154,19 +170,20 @@ func blocks(items []itemRow) []block {
 // The next lane is found by a linear scan, O(blocks × sessions in the window):
 // milliseconds on a store of a hundred sessions, and a hundred times that on
 // one ten times the size. container/heap is the fix if that ever shows.
-func merge(lanes [][]block, byID map[string]*session) []block {
+func merge(lanes [][]block) []block {
 	lanes = slices.Clone(lanes)
 	total := 0
 	for _, l := range lanes {
 		total += len(l)
 	}
 	first := func(a, b *itemRow) bool {
-		sa, sb := byID[a.sessionID], byID[b.sessionID]
-		return cmp.Or(
-			cmp.Compare(a.timeCreated, b.timeCreated),
-			cmp.Compare(sa.timeCreated, sb.timeCreated),
-			strings.Compare(sa.id, sb.id),
-		) < 0
+		switch {
+		case a.timeCreated != b.timeCreated:
+			return a.timeCreated < b.timeCreated
+		case a.borrowed != b.borrowed:
+			return a.borrowed
+		}
+		return a.id < b.id // unique, so no two blocks tie
 	}
 	out := make([]block, 0, total)
 	for len(out) < total {
@@ -224,16 +241,21 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 	for _, s := range wanted {
 		byID[s.id] = s
 	}
+	before := func(b block) bool {
+		return opts.since != nil && b.head.timeCreated < *opts.since
+	}
 	outside := func(b block) bool {
-		at := b.head.timeCreated
-		return (opts.since != nil && at < *opts.since) || (opts.until != nil && at >= *opts.until)
+		return before(b) || (opts.until != nil && b.head.timeCreated >= *opts.until)
 	}
 
 	// take groups one session's run of items, read from its lane's next, into
-	// the blocks to draw, and moves the lane past what it took. Under --follow
-	// it stops at a step not yet complete (settledPrefix). A subagent is never
-	// held: it is written whole when it ends and never changes.
+	// the blocks to draw, and moves the lane past what it took, noting whether
+	// any of it was skipped as older than --since. Under --follow it stops at a
+	// step not yet complete (settledPrefix), and notes the subagents whose
+	// marker it left behind the step. A subagent is never held: it is written
+	// whole when it ends and never changes.
 	var lanes [][]block
+	behind := map[string]bool{} // by subagent id: its subsession row is past a held step
 	take := func(s *session, run []itemRow) {
 		bs := blocks(run)
 		cut := len(bs)
@@ -244,24 +266,41 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 		l.held = cut < len(bs)
 		switch {
 		case l.held:
-			// Results follow their step, so nothing before the step is left
-			// unprinted.
+			// Results follow their step, so the held step's are all past it.
+			// A step before it answered past it too waits with it: drawn now,
+			// its result would be read again with the tail and drawn a second
+			// time, as one no call answers.
 			head := bs[cut].head
-			l.next = head.position
 			t.held = append(t.held, heldStep{tag: s.tag, what: waitingOn(bs[cut]), itemID: head.id, at: head.timeCreated})
+			if i := slices.IndexFunc(bs[:cut], func(b block) bool {
+				return len(b.results) > 0 && b.results[len(b.results)-1].position > head.position
+			}); i >= 0 {
+				cut = i
+			}
+			l.next = bs[cut].head.position
 		case len(run) > 0:
 			l.next = run[len(run)-1].position + 1
 		}
 		for i := range run {
 			if run[i].position < l.next {
 				l.at = run[i].timeCreated
+			} else if run[i].subsession != "" {
+				behind[run[i].subsession] = true
 			}
 		}
+		l.above = l.above || slices.ContainsFunc(bs[:cut], before)
 		t.cur.lanes[s.id] = l
 		if kept := slices.DeleteFunc(bs[:cut], outside); len(kept) > 0 {
 			lanes = append(lanes, kept)
 		}
 	}
+	// A subagent new to the round is taken after every other session, when
+	// behind is complete (below).
+	type newSub struct {
+		s   *session
+		run []itemRow
+	}
+	var subs []newSub
 
 	if prev == nil {
 		// Taken before the items are read: a row committed in between is then
@@ -290,6 +329,10 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 			for i := range run {
 				tally(s, &run[i])
 			}
+			if s.parentID != "" {
+				subs = append(subs, newSub{s, run})
+				continue
+			}
 			take(s, run)
 		}
 	} else {
@@ -313,8 +356,26 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 			if err != nil {
 				return nil, err
 			}
+			if !ok && s.parentID != "" {
+				subs = append(subs, newSub{s, run})
+				continue
+			}
 			take(s, run)
 		}
+	}
+	// A transfer_task's subagent, or a forked skill's, is written by the call
+	// itself, a moment before the call's result — seconds, with docker-agent's
+	// hooks — so a marker of one past a held step is that step's own: the
+	// subagent gets no lane, is read whole again next round, and comes out
+	// after the step, as one pass draws it. A background agent's lands
+	// whenever it ends and does not wait. docker-agent tells the kinds apart
+	// only by title.
+	for _, sub := range subs {
+		if behind[sub.s.id] && (sub.s.title == "Transferred task" || strings.HasPrefix(sub.s.title, "Skill: ")) {
+			delete(t.cur.lanes, sub.s.id)
+			continue
+		}
+		take(sub.s, sub.run)
 	}
 
 	// standing is what the stream already ends in, and the round's first gap is
@@ -333,7 +394,7 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 		standing = 0
 	}
 	usedSet := map[string]bool{}
-	for _, b := range merge(lanes, byID) {
+	for _, b := range merge(lanes) {
 		lines := renderBlock(b, opts)
 		if len(lines) == 0 {
 			continue
@@ -342,7 +403,7 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 		// One warning a run, at the first item drawn that this version could
 		// not read; the placeholders say the rest.
 		if b.head.unknown != "" && !opts.warnedUnknown {
-			opts.warnf("some items are unknown to this version (first: %s in %s)", neutralise(b.head.unknown), s.tag)
+			opts.warnf("some items are unknown to this version (first: %s in %s)", neutraliseLine(b.head.unknown), s.tag)
 			opts.warnedUnknown = true
 		}
 		if !usedSet[s.id] {
@@ -355,7 +416,7 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 		// started, and a held step comes out after other sessions moved on.
 		late := prev != nil && b.head.timeCreated < t.seam.high
 		if s.id != t.seam.prevSess {
-			flag := bannerFlag(s, opts.since, t.seam.seen[s.id], late)
+			flag := bannerFlag(t.cur.lanes[s.id].above, t.seam.seen[s.id], late)
 			gap(sessionGap)
 			t.lines = append(t.lines, sessionBanner(s, flag, opts.paint, opts.width)...)
 			gap(bannerGap)
@@ -393,10 +454,8 @@ func build(ctx context.Context, st *store, opts *options, prev *cursor, carry se
 // there rather than skipping it: the rest of the session waits with it. Other
 // sessions do not; each has a lane of its own.
 //
-// The unit is a step, where oc-transcript holds a whole answer: a subagent is
-// never held, so holding the answer would print every transfer_task's
-// subagent above the step that called it, and a docker-agent answer can stay
-// open for an hour.
+// The unit is a step, where oc-transcript holds a whole answer: a docker-agent
+// answer can stay open for an hour.
 //
 // A step that is not complete is emitted all the same when
 //
@@ -458,7 +517,7 @@ func waitingOn(b block) string {
 	paired, _ := b.answers()
 	for i, r := range paired {
 		if r == nil {
-			return cmp.Or(neutralise(string(it.data.ToolCalls[i].Function.Name)), "?")
+			return cmp.Or(neutraliseLine(string(it.data.ToolCalls[i].Function.Name)), "?")
 		}
 	}
 	return ""

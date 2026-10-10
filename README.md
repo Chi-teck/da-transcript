@@ -73,7 +73,7 @@ The flag before a tag says where the rest of that session is:
 | Flag | Meaning                                                                                                                            |
 |------|------------------------------------------------------------------------------------------------------------------------------------|
 | `⚑`  | the session starts here — this is its first block                                                                                  |
-| `⚐`  | it was already running when the window opened, so there is more above; widen `--since`, or read it whole with `--session ID --all` |
+| `⚐`  | its earlier blocks fall before the window, so there is more above; widen `--since`, or read it whole with `--session ID --all`     |
 | `↻`  | the stream has shown it before and come back to it — the earlier part is further up this same output                               |
 | `◷`  | `--follow` only, never in the opening transcript: what follows is older than something already printed above it, as when a background subagent has just finished, a step was held while other sessions went on, or a session was forked or branched meanwhile. It takes the place of the other three flags. |
 
@@ -86,6 +86,10 @@ model finished the step (docker-agent stamps a step at its end), so it means *an
 at*, not *started at*. A tool's duration runs from that time to its result, in whole
 seconds, so it includes any wait for approval.
 
+Lines are laid out to the width in `COLUMNS` if it is set, else the terminal's, else 100
+— for a pipe, or a file written with `--out` — and never narrower than 60 columns or
+wider than 1000.
+
 ## Options
 
 Run `da-transcript --help` for the full list. The ones you reach for:
@@ -97,8 +101,8 @@ Run `da-transcript --help` for the full list. The ones you reach for:
 | `--tools {compact,full,none}`  | tool call detail                                                               |
 | `--reasoning`, `--stats`       | include reasoning blocks / per-step token and cost lines                       |
 | `--session`                    | narrow to sessions whose id contains a fragment                                |
-| `-f`, `--follow`, `--interval` | tail new messages (cursor-driven, poll every N seconds)                        |
-| `-o`, `--out`                  | write to a file instead of stdout (colour off unless `--color always`; width from `COLUMNS`, else 100) |
+| `-f`, `--follow`, `--interval` | tail new messages (cursor-driven, poll every N seconds, 0.1 to 3600)           |
+| `-o`, `--out`                  | write to a file instead of stdout (a new file is created 0600; colour off unless `--color always`; width from `COLUMNS`, else 100) |
 | `--db`                         | the store, default `~/.cagent/session.db`                                      |
 | `--version`                    | print the version and exit                                                     |
 
@@ -127,8 +131,11 @@ These are `--follow`'s; a run without it is unaffected except where an item says
   `--follow` leaves it out and warns once, while a run without `--follow` shows it.
 - A message edited through `serve api` after `--follow` printed it is not printed
   again.
-- With a `--since` shorter than a step's streaming time, `--follow` skips a step that
-  started streaming before the window and finished inside it.
+- A step read while it streams has no time yet, so `--follow` dates it by the item
+  before it, its prompt or the last tool result. If that is older than `--since`, the
+  step is skipped even when it started inside the window, and its results are drawn
+  on their own when they land, as `tool` blocks whose call reads `?`; a `--since` that
+  takes in that item keeps the step. A run without `--follow` shows it once it ends.
 - A call whose step is older than `--since` but which is still running when
   `--follow` starts gets its result drawn on its own when it lands, as a `tool` block
   whose call reads `?`; a run without `--follow` with the same `--since` shows neither.

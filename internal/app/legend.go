@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,11 +63,11 @@ func legend(used []*session, root string, width int, list bool, counts map[strin
 		// the way a message body is, and like one it is made harmless.
 		where := s.directory
 		if root != "" {
-			if rel, err := filepath.Rel(root, where); err == nil && !strings.HasPrefix(rel, "..") {
+			if rel, err := filepath.Rel(root, where); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				where = rel
 			}
 		}
-		where = neutralise(homeTilde(where))
+		where = neutraliseLine(homeTilde(where))
 		if !list {
 			rows = append(rows, []string{s.tag, shortStamp(s.timeCreated), where, titleOf(s)})
 			continue
@@ -121,9 +122,14 @@ func tally(s *session, it *itemRow) {
 	u := it.data.Usage
 	s.hasTokens = true
 	for _, raw := range []json.RawMessage{u.Input, u.Output, u.CacheRead, u.CacheWrite} {
-		// Absent or not a number reads as 0.
-		n, _ := numberValue(raw)
-		s.tokens += int64(n)
+		// Absent, not a number, or not a whole count a float64 holds exactly
+		// reads as 0: converted, 1e999 or -5 would wrap or shrink the total.
+		n, ok := numberValue(raw)
+		if !ok || n < 0 || n >= 1<<53 || n != math.Trunc(n) {
+			continue
+		}
+		// Saturating: a total past what an int64 holds stops there.
+		s.tokens = min(s.tokens, math.MaxInt64-int64(n)) + int64(n)
 	}
 }
 

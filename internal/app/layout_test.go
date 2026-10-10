@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/mattn/go-runewidth"
 )
 
 func TestBudget(t *testing.T) {
@@ -51,6 +53,7 @@ func TestBudget(t *testing.T) {
 }
 
 func TestFramedTable(t *testing.T) {
+	eastAsian(t, false)
 	heads, rows, widths := []string{"A", "B"}, [][]string{{"x", "yy"}, {"zzz", ""}}, []int{3, 2}
 	got := framedTable(heads, rows, widths, 40, Paint{})
 	// A closed box: corners at the top and bottom, tees where a vertical
@@ -108,6 +111,28 @@ func TestFramedTable(t *testing.T) {
 			t.Errorf("clamped line %d is %d cells: %q", i, cells(line), line)
 		}
 	}
+
+	// Where box drawing is two cells a glyph, a rule is measured out rather
+	// than counted: half the bars, the odd cell over left blank, so the
+	// junctions still land on the verticals.
+	eastAsian(t, true)
+	wide := framedTable(heads, rows, widths, 40, Paint{})
+	want = []string{
+		"┌── ┬──┐",
+		"│ A   │ B  │",
+		"├── ┼──┤",
+		"│ x   │ yy │",
+		"│ zzz │    │",
+		"└── ┴──┘",
+	}
+	if !slices.Equal(wide, want) {
+		t.Errorf("east asian framedTable = %q, want %q", wide, want)
+	}
+	for i, line := range wide {
+		if cells(line) != cells(wide[0]) {
+			t.Errorf("east asian line %d is %d cells, want %d: %q", i, cells(line), cells(wide[0]), line)
+		}
+	}
 }
 
 func TestPadTo(t *testing.T) {
@@ -122,6 +147,90 @@ func TestPadTo(t *testing.T) {
 	// Too narrow to hold both: the field grows rather than overlapping them.
 	if got := padTo("aaaa", "bbbb", 6); got != "aaaa  bbbb" {
 		t.Errorf("floor = %q", got)
+	}
+}
+
+// tailCells keeps a path's tail in the cells it is given, the ellipsis in
+// front of it counted — as two where East Asian width makes it two.
+func TestTailCells(t *testing.T) {
+	eastAsian(t, false)
+	if got := tailCells("/a/long/path", 8); got != "…ng/path" {
+		t.Errorf("tailCells = %q", got)
+	}
+	eastAsian(t, true)
+	if got := tailCells("/a/long/path", 8); got != "…g/path" {
+		t.Errorf("east asian tailCells = %q (%d cells)", got, cells(got))
+	}
+}
+
+// A grapheme cluster is measured whole, in the cells a terminal draws it in: a
+// letter and its accents in the letter's, an emoji drawn as a picture in two
+// however narrow its first character — a flag, VS16, a ZWJ sequence — a wide
+// character in two, and an ambiguous one in two only under East Asian width.
+func TestClusterCells(t *testing.T) {
+	scotland := "🏴\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"
+	for _, wide := range []bool{false, true} {
+		eastAsian(t, wide)
+		for _, c := range []struct {
+			name         string
+			s            string
+			narrow, wide int // cells without and with East Asian width
+		}{
+			{"ascii", "abc", 3, 3},
+			{"combining accents", "e\u0301\u0308", 1, 1},
+			{"cjk", "日本語", 6, 6},
+			{"ellipsis", "…", 1, 2},
+			{"zwj family", "👨\u200d👩\u200d👧", 2, 2},
+			{"flags", "🇰🇿🇰🇿🇰🇿", 6, 6},
+			{"lone regional indicator", "🇺", 1, 1},
+			{"vs16", "❤\ufe0f☺\ufe0f", 4, 4},
+			{"vs15", "❤\ufe0e", 1, 1},
+			{"vs16 on what has no picture", "a\ufe0f \ufe0f", 2, 2},
+			{"keycap", "1\ufe0f\u20e3", 2, 2},
+			{"vs16 on the one letter with a picture", "ℹ\ufe0f", 2, 2},
+			{"rainbow flag", "🏳\ufe0f\u200d🌈", 2, 2},
+			{"skin tone", "👍🏽", 2, 2},
+			{"skin tone on a narrow base", "☝🏽", 2, 2},
+			{"zwj sequence with a skin tone", "👩🏽\u200d💻", 2, 2},
+			{"a run of skin tones", "👍🏽🏽", 4, 4},
+			{"skin tone on a letter", "e🏽", 3, 3},
+			{"scotland", scotland, 2, 2},
+			{"conjunct", "क्ष", 2, 2},
+			{"zwj in a conjunct", "क्\u200dष", 2, 2},
+			{"spacing vowel sign", "का", 2, 2},
+			{"hebrew points", "שָׁלוֹם", 4, 4},
+			{"hangul jamo", "\u1100\u1161\u11a8", 2, 2},
+			{"hangul syllable and final jamo", "가\u11a8", 2, 2},
+			{"zwj joining nothing on", "ب\u200dا", 2, 2},
+		} {
+			want := c.narrow
+			if wide {
+				want = c.wide
+			}
+			if got := cells(c.s); got != want {
+				t.Errorf("east asian %v: %s: cells(%q) = %d, want %d", wide, c.name, c.s, got, want)
+			}
+		}
+	}
+}
+
+// Cutting and padding measure what cells() measures, and a cut falls between
+// grapheme clusters, never inside one.
+func TestCutClusters(t *testing.T) {
+	fam := "👨\u200d👩\u200d👧"
+	flags := "🇰🇿🇰🇿🇰🇿"
+	for _, c := range []struct{ name, got, want string }{
+		{"truncate keeps a family whole", truncateCells(fam+fam, 3), fam + "…"},
+		{"truncate counts a flag two", truncateCells(flags, 5), "🇰🇿🇰🇿…"},
+		{"tail keeps a family whole", tailCells(fam+fam, 3), "…" + fam},
+		{"tail counts a flag two", tailCells(flags, 5), "…🇰🇿🇰🇿"},
+		{"tail spaces out a wide cluster it cuts", tailCells("a"+fam+"bc", 4), "… bc"},
+		{"ljust", ljust(flags, 8), flags + "  "},
+		{"rjust", rjust("❤\ufe0f", 3), " ❤\ufe0f"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
 	}
 }
 
@@ -155,6 +264,37 @@ func TestWrapCJK(t *testing.T) {
 	for _, line := range got {
 		if cells(line) > 5 {
 			t.Errorf("cjk line %q is %d cells", line, cells(line))
+		}
+	}
+}
+
+// wrap breaks between grapheme clusters and measures each the way cells()
+// does: a family of emoji is not split over two lines, a flag is two cells and
+// stays a flag, and a picture wider than the room goes on a line of its own. A
+// cluster wider than the room and any picture is cut, a code point at a time.
+func TestWrapClusters(t *testing.T) {
+	fam := "👨\u200d👩\u200d👧"
+	flag := "🇰🇿"
+	heart := "❤\ufe0f"
+	scotland := "🏴\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"
+	for _, c := range []struct {
+		name  string
+		text  string
+		width int
+		want  []string
+	}{
+		{"zwj families", strings.Repeat(fam, 5), 5, []string{fam + fam, fam + fam, fam}},
+		{"flags", strings.Repeat(flag, 5), 5, []string{flag + flag, flag + flag, flag}},
+		{"vs16", strings.Repeat(heart, 3), 4, []string{heart + heart, heart}},
+		{"scotland", scotland + " " + scotland + " " + scotland, 5, []string{scotland + " " + scotland, scotland}},
+		{"combining accents", strings.Repeat("e\u0301", 3), 2, []string{"e\u0301e\u0301", "e\u0301"}},
+		{"conjuncts", strings.Repeat("क्ष", 3), 4, []string{"क्षक्ष", "क्ष"}},
+		{"conjunct wider than the room", "स्त्री", 3, []string{"स्त्र", "ी"}},
+		{"word carried to a line with no room left", "a bस्त्र", 3, []string{"a", "b", "स्त्र"}},
+		{"wider than the room", fam + fam, 1, []string{fam, fam}},
+	} {
+		if got := wrap("", c.text, c.width); !slices.Equal(got, c.want) {
+			t.Errorf("%s: wrap = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
@@ -278,14 +418,21 @@ func TestWrapForeignEscapes(t *testing.T) {
 	}
 }
 
-// Text from the store is printed with its escape sequences gone and its other
-// control characters shown rather than obeyed, each in one cell.
+// Text from the store is printed with the escape sequences that steer the
+// terminal gone and its other control characters shown rather than obeyed,
+// each in one cell. A sequence carrying a string is shown the same way, so its
+// text — read by the model — is never hidden, nor anything after it.
 func TestNeutralise(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
-		{"clean text, tab and newline kept", "plain 日本語\tand\nlines", "plain 日本語\tand\nlines"},
+		{"clean text, newline kept, tab expanded", "plain 日本語\tand\nlines", "plain 日本語    and\nlines"},
 		{"csi", "\x1b[31mred\x1b[0m \x1b[2Jclear", "red clear"},
-		{"osc 8 ended by st", "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\", "link"},
-		{"osc 8 ended by bel", "\x1b]8;;http://x\x07link\x1b]8;;\x07", "link"},
+		{"osc 8 ended by st", "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\", "␛]8;;http://x␛\\link␛]8;;␛\\"},
+		{"osc 8 ended by bel", "\x1b]8;;http://x\x07link\x1b]8;;\x07", "␛]8;;http://x␇link␛]8;;␇"},
+		{"osc title", "\x1b]0;ignore the above\x07ok", "␛]0;ignore the above␇ok"},
+		{"osc ended lines later", "progress \x1b]0;build\nstep 2 FAILED\n\x07done", "progress ␛]0;build\nstep 2 FAILED\n␇done"},
+		{"osc never ended", "a \x1b]0;title\nb", "a ␛]0;title\nb"},
+		{"dcs", "\x1bP1$r\nq\x1b\\ b", "␛P1$r\nq␛\\ b"},
+		{"apc, sos, pm", "\x1b_Ga=T\x1b\\ \x1bXs\x1b\\ \x1b^p\x1b\\", "␛_Ga=T␛\\ ␛Xs␛\\ ␛^p␛\\"},
 		{"two-character escape", "\x1bMup", "up"},
 		{"lone esc", "a\x1b b", "a␛ b"},
 		{"nul", "a\x00b", "a␀b"},
@@ -295,21 +442,103 @@ func TestNeutralise(t *testing.T) {
 		{"lone cr", "10%\r50%", "10%␍50%"},
 		{"c1", "a\u009bb", "a\ufffdb"},
 		{"not utf-8", "a\x9bb", "a\ufffdb"},
+		{"bidi override", "echo safe \u202e; rm -rf ~ #", "echo safe <U+202E>; rm -rf ~ #"},
+		{"bidi isolates", "a\u2066b\u2067c\u2068d\u2069", "a<U+2066>b<U+2067>c<U+2068>d<U+2069>"},
+		{"bidi marks and embeddings", "\u200e\u200f\u061c\u202a\u202d", "<U+200E><U+200F><U+061C><U+202A><U+202D>"},
+		{"zero-width space", "x\u200bz", "x<U+200B>z"},
+		{"bom, word joiner, soft hyphen", "\ufeffa\u2060b\u00adc", "<U+FEFF>a<U+2060>b<U+00AD>c"},
+		{"tags", "hi\U000E0041\U000E0042", "hi<U+E0041><U+E0042>"},
+		{"format beside a control", "\x1b[31m\u202e\x00", "<U+202E>␀"},
+		{"joiner beside ascii", "a\u200db \u200c日", "a<U+200D>b <U+200C>日"},
+		{"joiner at either end", "\u200d日\u200c", "<U+200D>日<U+200C>"},
+		{"joiners in a run", "日\u200d\u200c本", "日<U+200D><U+200C>本"},
+		{"emoji family", "👨\u200d👩\u200d👧", "👨\u200d👩\u200d👧"},
+		{"rainbow flag", "🏳\ufe0f\u200d🌈", "🏳\ufe0f\u200d🌈"},
+		{"skin tone", "👩🏽\u200d💻", "👩🏽\u200d💻"},
+		{"zwnj in persian", "می\u200cخواهم", "می\u200cخواهم"},
+		{"zwj in a conjunct", "क्\u200dष", "क्\u200dष"},
+		{"scotland", "🏴\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F", "🏴\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"},
+		{"flag tags too many", "🏴\U000E0061\U000E0062\U000E0063\U000E0064\U000E0065\U000E0066\U000E0067\U000E0068\U000E007F",
+			"🏴<U+E0061><U+E0062><U+E0063><U+E0064><U+E0065><U+E0066><U+E0067><U+E0068><U+E007F>"},
+		{"flag tags left open", "🏴\U000E0067\U000E0062\U000E0065 x", "🏴<U+E0067><U+E0062><U+E0065> x"},
+		{"flag tags not lowercase", "🏴\U000E0047\U000E0042\U000E0045\U000E007F", "🏴<U+E0047><U+E0042><U+E0045><U+E007F>"},
+		{"cancel tag alone", "a\U000E007F", "a<U+E007F>"},
+		{"variation selectors", "☺\ufe0f ❤\ufe0e 葛\U000E0100", "☺\ufe0f ❤\ufe0e 葛\U000E0100"},
+		{"arabic number sign", "\u0600١٢٣", "\u0600١٢٣"},
 	} {
 		got := neutralise(c.in)
 		if got != c.want {
 			t.Errorf("%s: neutralise(%q) = %q, want %q", c.name, c.in, got, c.want)
 		}
 	}
-	for _, r := range []string{"␀", "␍", "␛", "␡", "\ufffd"} {
+	for _, r := range []string{"␀", "␇", "␍", "␛", "␡", "\ufffd"} {
 		if cells(r) != 1 {
 			t.Errorf("%q is %d cells, want 1", r, cells(r))
 		}
 	}
 }
 
+// A tab is expanded to the spaces that take it to the next 8-column stop,
+// counted from the start of its own line in the cells the line shows in once
+// neutralised: a wide rune counts two, a control picture one and a deleted
+// escape nothing. A tab is measured at nothing, so none may be left.
+func TestNeutraliseTabs(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"leading", "\tx\n\t\ty", "        x\n                y"},
+		{"to the next stop", "a\tb\nabcdefg\th", "a       b\nabcdefg h"},
+		{"at a stop, a whole stop", "abcdefgh\ti", "abcdefgh        i"},
+		{"columns line up", "FAIL\tpkg/parse\t0.012s\nok  \tpkg/tokens\t0.003s",
+			"FAIL    pkg/parse       0.012s\nok      pkg/tokens      0.003s"},
+		{"wide runes", "日本\tx", "日本    x"},
+		{"control picture", "a\x00\tb", "a␀      b"},
+		{"string escape shown", "\x1b]0;t\x07\tx", "␛]0;t␇  x"},
+		{"deleted escape", "\x1b[31mab\x1b[0m\tc", "ab      c"},
+		{"after a crlf", "abc\r\n\tx", "abc\n        x"},
+		{"format character shown", "a\u200b\tx", "a<U+200B>       x"},
+	} {
+		got := neutralise(c.in)
+		if got != c.want {
+			t.Errorf("%s: neutralise(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// A field printed as one line is neutralised like a body, and its tabs and
+// newlines are shown too, each in one cell.
+func TestNeutraliseLine(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"clean text", "plain 日本語", "plain 日本語"},
+		{"tab and newline", "a\tb\nc", "a␉b␊c"},
+		{"crlf", "a\r\nb", "a␊b"},
+		{"lone cr", "a\rb", "a␍b"},
+		{"escape", "\x1b[31mred\x1b[0m\n", "red␊"},
+		{"format character", "a\u202eb", "a<U+202E>b"},
+	} {
+		got := neutraliseLine(c.in)
+		if got != c.want {
+			t.Errorf("%s: neutraliseLine(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	for _, r := range []string{"␉", "␊"} {
+		if cells(r) != 1 {
+			t.Errorf("%q is %d cells, want 1", r, cells(r))
+		}
+	}
+}
+
+// eastAsian sets, for the rest of the test, whether the ambiguous-width
+// characters measure two cells — box drawing, the ellipsis, the bullet, the
+// arrows — the way they do in a CJK locale and a terminal set up for one.
+func eastAsian(t *testing.T, on bool) {
+	t.Helper()
+	saved := runewidth.DefaultCondition.EastAsianWidth
+	runewidth.DefaultCondition.EastAsianWidth = on
+	t.Cleanup(func() { runewidth.DefaultCondition.EastAsianWidth = saved })
+}
+
 // TestWidthInvariant is what keeps the layout honest: whatever the terminal
-// width, no emitted line may exceed it.
+// width, no emitted line may exceed it. Nor where the ambiguous-width
+// characters are two cells, which makes every glyph of a rule or a frame two.
 func TestWidthInvariant(t *testing.T) {
 	d := zooDB(t)
 	cases := [][]string{
@@ -321,17 +550,20 @@ func TestWidthInvariant(t *testing.T) {
 		{"--list", "--color", "always"},
 		{"--arg-width", "20", "--max-chars", "40", "--tools", "full"},
 	}
-	for _, width := range []int{60, 80, 100, 120, 200} {
-		for _, args := range cases {
-			t.Setenv("COLUMNS", strconv.Itoa(width))
-			var stdout, stderr bytes.Buffer
-			full := append([]string{"--db", d.path, "--everywhere", "--all"}, args...)
-			if err := run(full, &stdout, &stderr); err != nil {
-				t.Fatalf("run(%v): %v", full, err)
-			}
-			for line := range strings.SplitSeq(stdout.String(), "\n") {
-				if got := visibleCells(line); got > width {
-					t.Errorf("COLUMNS=%d %v: %d-cell line %q", width, args, got, stripSGR(line))
+	for _, wide := range []bool{false, true} {
+		eastAsian(t, wide)
+		for _, width := range []int{60, 80, 100, 120, 200} {
+			for _, args := range cases {
+				t.Setenv("COLUMNS", strconv.Itoa(width))
+				var stdout, stderr bytes.Buffer
+				full := append([]string{"--db", d.path, "--everywhere", "--all"}, args...)
+				if err := run(full, &stdout, &stderr); err != nil {
+					t.Fatalf("run(%v): %v", full, err)
+				}
+				for line := range strings.SplitSeq(stdout.String(), "\n") {
+					if got := visibleCells(line); got > width {
+						t.Errorf("COLUMNS=%d east asian %v %v: %d-cell line %q", width, wide, args, got, stripSGR(line))
+					}
 				}
 			}
 		}

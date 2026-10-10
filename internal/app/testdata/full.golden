@@ -310,7 +310,7 @@ all projects  all time  4 session(s)
   │     }
   │   out
   │     building
-  │     see run 7 for the log
+  │     see ␛]8;;https://ci.example/run/7␛\run 7␛]8;;␛\ for the log
   │     progress 10%␍50%␍100%
   │     test_a FAIL␇
   │     nul:␀ esc:␛ end
@@ -341,7 +341,10 @@ all projects  all time  4 session(s)
   │     }
   │   err
   │     Command timed out after 30s
-  │     Output: running 12 tests
+  │     Output: --- FAIL: TestParse (0.00s)
+  │             parse_test.go:42: Parse("a, b") kept the space after the comma: got ["a" " b"]
+  │     FAIL    example.com/proj/parse  0.012s
+  │     ok      example.com/proj/lex    0.003s
   │ shell ls -la /proj                                                                  ERR       2s
   │   in ls -la /proj
   │   err Error calling tool: invalid character 'l' looking for beginning of value

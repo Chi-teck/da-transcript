@@ -226,7 +226,10 @@ all projects  all time  4 session(s)
   │ shell make test                                                                     ERR      30s
   │   err
   │     Command timed out after 30s
-  │     Output: running 12 tests
+  │     Output: --- FAIL: TestParse (0.00s)
+  │             parse_test.go:42: Parse("a, b") kept the space after the comma: got ["a" " b"]
+  │     FAIL    example.com/proj/parse  0.012s
+  │     ok      example.com/proj/lex    0.003s
   │ shell ls -la /proj                                                                  ERR       2s
   │   err Error calling tool: invalid character 'l' looking for beginning of value
   │ search_files_content TODO                                                            ok       2s

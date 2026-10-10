@@ -167,7 +167,8 @@ func zooDB(t *testing.T) *testDB {
 	  "model":"zai/glm-5.3-flash","finish_reason":"stop",
 	  "usage":{"input_tokens":900,"output_tokens":120,"cached_input_tokens":0,"cached_write_tokens":0}}`)
 	// The tool shapes the steps above lack: a CJK summary; output full of what
-	// a terminal would act on; the shell's failures, and the one that is not;
+	// a terminal would act on; the shell's failures, one in go test's tabbed
+	// columns, and the one that is not;
 	// arguments that are not JSON; a key that beats another; long arguments,
 	// and none; docker-agent's notice for an oversized result; an MCP tool's
 	// document; an array argument; a wait that timed out on one task and found
@@ -226,7 +227,10 @@ func zooDB(t *testing.T) *testDB {
 	result(zoo2, "viewer", "call_v13", "2026-08-18T09:32:20Z", `{"all_done":false,"timed_out":true,"tasks":[`+
 		`{"task_id":"agent_task_2","status":"failed","done":true,"error":"model failed: HTTP 429"},`+
 		`{"task_id":"agent_task_3","status":"running","done":false,"output":"step 1 of 3 done","truncated":true}]}`)
-	result(zoo2, "viewer", "call_v5", "2026-08-18T09:32:30Z", "Command timed out after 30s\nOutput: running 12 tests")
+	result(zoo2, "viewer", "call_v5", "2026-08-18T09:32:30Z", "Command timed out after 30s\n"+
+		"Output: --- FAIL: TestParse (0.00s)\n"+
+		"\tparse_test.go:42: Parse(\"a, b\") kept the space after the comma: got [\"a\" \" b\"]\n"+
+		"FAIL\texample.com/proj/parse\t0.012s\nok  \texample.com/proj/lex\t0.003s")
 	// Written before v1.55: an image as a nameless data: URL, a file by path.
 	d.message(zoo2, "", `{"role":"user","content":"compare these","created_at":"2026-08-18T09:35:00Z",
 	  "multi_content":[{"type":"text","text":"compare these"},
@@ -383,9 +387,10 @@ func TestRenderGolden(t *testing.T) {
 				t.Error("a data: URI reached the output")
 			}
 			// Nothing from the store reaches the terminal raw: the only
-			// escapes are the colour this program wrote.
-			if plain := stripSGR(out); strings.ContainsAny(plain, "\x1b\x00") {
-				t.Errorf("a raw ESC or NUL reached the output: %q", plain)
+			// escapes are the colour this program wrote, and no tab is left
+			// for the terminal to stretch past what the layout measured.
+			if plain := stripSGR(out); strings.ContainsAny(plain, "\x1b\x00\t") {
+				t.Errorf("a raw ESC, NUL or tab reached the output: %q", plain)
 			}
 		})
 	}
@@ -409,6 +414,26 @@ func TestRenderTruncationMarks(t *testing.T) {
 	full := runArgs(t, d, "", "--tools", "full", "--reasoning", "--stats")
 	if !strings.Contains(full, "available in a file: /tmp/docker-agent-tool-results/") {
 		t.Error("full mode should print the notice naming the file")
+	}
+}
+
+// The [output truncated] mark outlasts a long tool name: at the narrowest
+// width the name is cut short to make room for it, and the line still ends at
+// the margin. Below that width the mark is kept anyway, for the wrapper to fold.
+func TestTruncationMarkKeepsItsRoom(t *testing.T) {
+	result := &itemRow{typ: "message", data: itemData{Role: "tool", Content: "Tool call result was too large" +
+		" (90000 bytes; limit 51200 bytes). The full result is available in a file: /tmp/x\n\nFAIL"}}
+	call := &toolCall{}
+	call.Function.Name = "github_list_pull_request_review_comments"
+	call.Function.Arguments = toolArguments(`{"path":"x"}`)
+	for _, width := range []int{60, 30} {
+		head := renderTool(call, 0, result, &options{tools: "compact", width: width, maxChars: 2000, argWidth: 100})[0]
+		if !strings.Contains(head, "… [output truncated]") {
+			t.Errorf("width %d: the name is not cut short for the mark: %q", width, head)
+		}
+		if width == 60 && cells(head) > width-bodyIndent {
+			t.Errorf("width %d: the line is %d cells, past the margin: %q", width, cells(head), head)
+		}
 	}
 }
 
@@ -448,30 +473,27 @@ func TestColourTransparency(t *testing.T) {
 }
 
 func TestSessionBannerFlags(t *testing.T) {
-	s := &session{sessionRow: sessionRow{id: "ses_aaaaaa", title: "Zoo", timeCreated: 100}, tag: "aaaaaa"}
-	// Whether the session predates the window is a fact about the session, not
-	// about what this particular run of blocks happens to contain — but a
-	// banner for a session already announced answers a nearer question first,
-	// and says so however the window fell.
+	s := &session{sessionRow: sessionRow{id: "ses_aaaaaa", title: "Zoo"}, tag: "aaaaaa"}
+	// A session the window cut into is flagged as joined — but a banner for a
+	// session already announced answers a nearer question first, and says so
+	// however the window fell.
 	//
 	// A late banner, which only a --follow tail draws, says the most and wins
 	// over all three.
 	for _, c := range []struct {
-		name       string
-		since      *int64
-		seen, late bool
-		want       string
+		name              string
+		above, seen, late bool
+		want              string
 	}{
-		{"started inside the window", new(int64(50)), false, false, newFlag},
-		{"started before it", new(int64(200)), false, false, joinFlag},
-		{"--all: no window to predate", nil, false, false, newFlag},
-		{"come back to", new(int64(50)), true, false, backFlag},
-		{"come back to, and older than the window", new(int64(200)), true, false, backFlag},
-		{"late, new", new(int64(50)), false, true, lateFlag},
-		{"late, joined", new(int64(200)), false, true, lateFlag},
-		{"late, come back to", new(int64(50)), true, true, lateFlag},
+		{"starts inside the window", false, false, false, newFlag},
+		{"the window cut into it", true, false, false, joinFlag},
+		{"come back to", false, true, false, backFlag},
+		{"come back to, and cut into", true, true, false, backFlag},
+		{"late, new", false, false, true, lateFlag},
+		{"late, joined", true, false, true, lateFlag},
+		{"late, come back to", false, true, true, lateFlag},
 	} {
-		if got := bannerFlag(s, c.since, c.seen, c.late); got != c.want {
+		if got := bannerFlag(c.above, c.seen, c.late); got != c.want {
 			t.Errorf("%s: bannerFlag = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -493,6 +515,27 @@ func TestSessionBannerFlags(t *testing.T) {
 	for _, line := range sessionBanner(wide, newFlag, paint, 30) {
 		if cells(line) > 30 {
 			t.Errorf("banner line %q is %d cells", line, cells(line))
+		}
+	}
+}
+
+// TestJoinFlagFromWindow: ⚐ promises more above, so it goes by what the window
+// cut, not by when the session was created. A tab opened an hour before the
+// window and first prompted inside it starts in view, as --all shows; a fork
+// made inside the window has its copied history above it.
+func TestJoinFlagFromWindow(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	d.session("ses_t", "", "Tab", "/p", clock(-3600))
+	d.userText("ses_t", clock(60), "first prompt")
+	d.whole("", "ses_f", clock(100), userJSON(clock(-600), "old prompt"), stepJSON(clock(-500), "old answer"),
+		userJSON(clock(120), "after the fork"))
+	opts := roundOpts(t, d)
+	opts.all, opts.since = false, new(ms(t, clock(0)))
+	out := strings.Join(onePass(t, d, opts), "\n")
+	for _, want := range []string{newFlag + " " + tagOpen + "ses_t" + tagClose, joinFlag + " " + tagOpen + "ses_f" + tagClose} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q:\n%s", want, out)
 		}
 	}
 }
@@ -715,6 +758,50 @@ func TestIndentBlockClamp(t *testing.T) {
 	}
 }
 
+// A body of one line keeps its leading spaces, as each line of a longer one
+// does: git status --short opens a line with one, and the arguments and an
+// error are printed as they came too.
+func TestOneLineBodyKeepsItsIndent(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p", clock(0))
+	d.step("aaaaaa", clock(0), "", callJSON("c1", "shell", `{"cmd":"git status --short"}`),
+		callJSON("c2", "shell", "  not json"))
+	d.toolResult("aaaaaa", "c1", clock(1), " M file.go\n")
+	d.message("aaaaaa", "root", `{"role":"tool","tool_call_id":"c2","is_error":true,"content":"  boom","created_at":"`+
+		clock(1)+`"}`)
+
+	got := runArgs(t, d, "", "--tools", "full")
+	for _, want := range []string{"  │   out  M file.go\n", "  │   in   not json\n", "  │   err   boom\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("transcript lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// Arguments that are a bare JSON string are printed as the model wrote them,
+// quotes and escapes included: the text inside would read as arguments that
+// were not JSON, and "a\nb" would break in two.
+func TestStringArgumentsKeepTheirQuotes(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p", clock(0))
+	d.step("aaaaaa", clock(0), "", callJSON("c1", "shell", `"hello"`), callJSON("c2", "shell", `"a\nb"`),
+		callJSON("c3", "shell", "hello"))
+	for _, id := range []string{"c1", "c2", "c3"} {
+		d.toolResult("aaaaaa", id, clock(1), "x")
+	}
+
+	got := runArgs(t, d, "", "--tools", "full")
+	for _, want := range []string{
+		"  │ shell \"hello\" ", "  │   in \"hello\"\n",
+		"  │ shell \"a\\nb\" ", "  │   in \"a\\nb\"\n",
+		"  │ shell hello ", "  │   in hello\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("transcript lacks %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestEmptyReasoningIsNotABody pins the guard the reasoning case shares with
 // text. docker-agent inserts a step's row at its first streamed chunk, before
 // the model has written anything worth reading into it, so a row that exists
@@ -845,6 +932,52 @@ func TestInlinedAttachments(t *testing.T) {
 	}
 }
 
+// A prompt whose content is empty, or only whitespace, is printed from its
+// text parts, as serve api can store one: each part up to the first text file
+// inlined into it, a blank line between parts, the files and the image named
+// as attachments. A prompt with content is printed from content alone, though
+// its text part repeats it.
+func TestPromptInTextParts(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "A", "/p", "2026-08-18T12:00:00Z")
+	d.message("aaaaaa", "", `{"role":"user","content":"","created_at":"2026-08-18T12:00:00Z",
+	  "multi_content":[{"type":"text","text":"hello"}]}`)
+	d.message("aaaaaa", "", `{"role":"user","content":"","created_at":"2026-08-18T12:01:00Z",
+	  "multi_content":[{"type":"text","text":"explain this\n\n<attached_file path=\"/p/a.go\">\npackage a\n</attached_file>"},
+	    {"type":"text","text":"<attached_file path=\"/p/b.go\">\npackage b\n</attached_file>"},
+	    {"type":"text","text":"and this"}]}`)
+	d.message("aaaaaa", "", `{"role":"user","content":" \n","created_at":"2026-08-18T12:02:00Z",
+	  "multi_content":[{"type":"text","text":"describe it"},
+	    {"type":"document","document":{"name":"shot.png","mime_type":"image/png","source":{"inline_data":"QUJD"}}}]}`)
+	d.message("aaaaaa", "", `{"role":"user","content":"typed","created_at":"2026-08-18T12:03:00Z",
+	  "multi_content":[{"type":"text","text":"typed"}]}`)
+
+	out := runArgs(t, d, "")
+	for _, want := range []string{
+		"│ hello\n",
+		"│ explain this\n  │\n  │ and this\n",
+		"attachment a.go (?)",
+		"attachment b.go (?)",
+		"│ describe it\n",
+		"attachment shot.png (image/png)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("transcript lacks %q:\n%s", want, out)
+		}
+	}
+	for _, leak := range []string{"<attached_file ", "</attached_file>", "package a", "package b", "QUJD"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q reached the output:\n%s", leak, out)
+		}
+	}
+	if n := strings.Count(out, "typed"); n != 1 {
+		t.Errorf("the prompt with content was printed %d times, want 1:\n%s", n, out)
+	}
+	if n := strings.Count(out, "• user"); n != 4 {
+		t.Errorf("%d prompts printed, want 4:\n%s", n, out)
+	}
+}
+
 // A prompt whose text holds a NUL byte is not text: it is drawn as one line
 // saying how big it is, and none of it reaches the output. A NUL is the whole
 // test — an escape in a prompt that has none is the prompt's own, and is made
@@ -898,6 +1031,89 @@ func TestStoreTextNeutralised(t *testing.T) {
 				t.Errorf("%v: output lacks %q:\n%s", c.args, want, out)
 			}
 		}
+	}
+}
+
+// A field printed as one line stays on it: a newline or a tab in a session's
+// title or directory, in the name of an item this version cannot read, or in
+// the call a held step waits on, shows as ␊ or ␉ rather than ending the line
+// and letting the rest draw one of its own — a second banner, half a table
+// row, a warning nobody gave.
+func TestOneLineFieldsStayOnOneLine(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa", "", "Fix bug\n ⚑ ❬ffffff❭ Rotate\tkeys", "/p/a\nb", "2026-08-18T12:00:00Z")
+	d.userText("aaaaaa", "2026-08-18T12:00:00Z", "hi")
+	d.item("aaaaaa", "myst\nwarning: ery", `{"created_at":"2026-08-18T12:00:01Z"}`)
+	d.session("bbbbbb", "", "B", "/p", "2026-08-18T12:00:00Z")
+	d.step("bbbbbb", "2026-08-18T12:00:02Z", "", callJSON("c1", `sh\nwarning: ell`, `{"cmd":"date"}`))
+	t.Setenv("COLUMNS", "")
+	title := "Fix bug␊ ⚑ ❬ffffff❭ Rotate␉keys"
+	for _, c := range []struct {
+		args  []string
+		wants []string
+	}{
+		{nil, []string{"│ /p/a␊b │ " + title + " │", " ⚑ ❬aaaaaa❭ " + title + " ", " /p/a␊b\n"}},
+		{[]string{"--list"}, []string{"│ aaaaaa  │ /p/a␊b │", "│ " + title + " │"}},
+	} {
+		var stdout, stderr bytes.Buffer
+		if err := run(append([]string{"--db", d.path, "--everywhere", "--all"}, c.args...), &stdout, &stderr); err != nil {
+			t.Fatalf("run(%v): %v", c.args, err)
+		}
+		out := stdout.String() + stderr.String()
+		for _, want := range append(c.wants, "(first: myst␊warning: ery in aaaaaa)\n") {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v: output lacks %q:\n%s", c.args, want, out)
+			}
+		}
+	}
+	// The same name is what the warning about a held step quotes.
+	f := &tailer{t: t, st: d.open(t), opts: roundOpts(t, d, "--follow", "--session", "bbbbbb")}
+	if got, want := f.round().empty, "Nothing settled yet — waiting on sh␊warning: ell in bbbbbb."; got != want {
+		t.Errorf("empty = %q, want %q", got, want)
+	}
+}
+
+// A session's tag is cut from an id the store holds, so it is store text like
+// any other: an escape in a crafted id is dropped or shown, never sent, and a
+// newline or a tab shows as ␊ or ␉ — on the banner, in the key and under
+// --list, on the marker where a subagent folds back, in the warning about an
+// unknown item, and in the notice about a held step.
+func TestSessionTagNeutralised(t *testing.T) {
+	d := newTestDB(t)
+	d.session("aaaaaa\x1bc", "", "A", "/p", "2026-08-18T12:00:00Z")
+	d.userText("aaaaaa\x1bc", "2026-08-18T12:00:00Z", "hi")
+	d.item("aaaaaa\x1bc", "mystery", `{"created_at":"2026-08-18T12:00:01Z"}`)
+	d.session("bb\tb\nb", "aaaaaa\x1bc", "B", "/p", "2026-08-18T12:00:02Z")
+	d.implicitUser("bb\tb\nb", "2026-08-18T12:00:02Z", "Please proceed.")
+	d.subsession("aaaaaa\x1bc", "bb\tb\nb")
+	d.session("c\x1b]0;c", "", "C", "/p", "2026-08-18T12:00:03Z")
+	d.step("c\x1b]0;c", "2026-08-18T12:00:03Z", "", callJSON("c1", "shell", `{"cmd":"date"}`))
+	t.Setenv("COLUMNS", "")
+	for _, c := range []struct {
+		args  []string
+		wants []string
+	}{
+		{nil, []string{"│ aaaaaa  │", "│ bb␉b␊b↓ │", "│ c␛]0;c  │", "❬aaaaaa❭ A", "❬bb␉b␊b↓❭ B", "❬c␛]0;c❭ C",
+			"session ❬bb␉b␊b↓❭"}},
+		{[]string{"--list"}, []string{"│ aaaaaa  │", "│ bb␉b␊b↓ │", "│ c␛]0;c  │"}},
+	} {
+		var stdout, stderr bytes.Buffer
+		if err := run(append([]string{"--db", d.path, "--everywhere", "--all"}, c.args...), &stdout, &stderr); err != nil {
+			t.Fatalf("run(%v): %v", c.args, err)
+		}
+		out := stdout.String() + stderr.String()
+		if strings.Contains(out, "\x1b") {
+			t.Errorf("%v: a raw ESC reached the output:\n%q", c.args, out)
+		}
+		for _, want := range append(c.wants, "(first: mystery in aaaaaa)\n") {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v: output lacks %q:\n%s", c.args, want, out)
+			}
+		}
+	}
+	f := &tailer{t: t, st: d.open(t), opts: roundOpts(t, d, "--follow", "--session", "c\x1b]0;c")}
+	if got, want := f.round().empty, "Nothing settled yet — waiting on shell in c␛]0;c."; got != want {
+		t.Errorf("empty = %q, want %q", got, want)
 	}
 }
 

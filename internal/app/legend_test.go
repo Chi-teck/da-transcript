@@ -3,10 +3,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // The legend's `where` column is relative to --root when a session sits under
@@ -44,6 +48,28 @@ func TestLegendWhereRelativeToRoot(t *testing.T) {
 	}
 }
 
+// A directory whose name merely starts with two dots, ..cache, is under the
+// root like any other and is shown relative to it. Only the root's parent and
+// what sits beside the root are outside it, and stay absolute.
+func TestLegendWhereDotDotName(t *testing.T) {
+	root := filepath.FromSlash("/r")
+	for dir, want := range map[string]string{
+		"/r/..cache":   "..cache",
+		"/r/..cache/x": "..cache/x",
+		"/":            "/",
+		"/x":           "/x",
+	} {
+		dir, want = filepath.FromSlash(dir), filepath.FromSlash(want)
+		s := &session{sessionRow: sessionRow{directory: dir}}
+		lines := legend([]*session{s}, root, 200, false, nil, Paint{})
+		// The top rule, the heads and their rule, the row, the foot rule.
+		cols := strings.Split(strings.Trim(lines[3], "│"), "│")
+		if got := strings.TrimSpace(cols[2]); got != want {
+			t.Errorf("where column for %s under root %s is %q, want %q", dir, root, got, want)
+		}
+	}
+}
+
 // The --list table ends on a foot rule and a line counting what is above it,
 // back to the earliest row's date. The transcript's key is boxed the same way
 // but gets no foot line: the summary over it already says what that would.
@@ -73,6 +99,32 @@ func TestLegendFooter(t *testing.T) {
 	// The summary, a blank line, then the box.
 	if key := strings.Split(stdout.String(), "\n")[2]; !strings.HasPrefix(key, "┌") {
 		t.Errorf("key opens on %q, want the box", key)
+	}
+}
+
+// Where box drawing is two cells a glyph, as in a CJK locale, the frame costs
+// more than it does anywhere else and the columns are budgeted knowing it: the
+// box still closes at its right edge, every line of it as wide as the rest,
+// rather than being cut at the margin. Not at eighty: there the fixed columns
+// and the wider frame leave the flexible pair less than its floors, and the
+// row is cut at the margin the way it is at sixty with narrow glyphs.
+func TestLegendEastAsian(t *testing.T) {
+	eastAsian(t, true)
+	d := zooDB(t)
+	for _, width := range []int{100, 200} {
+		t.Setenv("COLUMNS", strconv.Itoa(width))
+		var stdout, stderr bytes.Buffer
+		if err := run([]string{"--db", d.path, "--everywhere", "--all", "--list"}, &stdout, &stderr); err != nil {
+			t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
+		}
+		lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+		box := lines[:len(lines)-1] // the footer sits outside it
+		for _, line := range box {
+			edge, _ := utf8.DecodeLastRuneInString(line)
+			if !strings.ContainsRune("┐│┤┘", edge) || cells(line) != cells(box[0]) {
+				t.Errorf("COLUMNS=%d: box line %q (%d cells) is not closed at %d cells", width, line, cells(line), cells(box[0]))
+			}
+		}
 	}
 }
 
@@ -186,6 +238,42 @@ func TestTally(t *testing.T) {
 	}
 	if n := by["none"]; n.hasTokens || tokensOf(n) != "" {
 		t.Errorf("none: tokens = %d (has %v), want nothing reported", n.tokens, n.hasTokens)
+	}
+}
+
+// A figure that is not a whole count of tokens adds nothing to the total, the
+// way an absent one does: not one past what a float64 holds exactly, not a
+// negative or a fraction. Added, 1e999 wrapped the total round to a negative
+// number. A quoted number counts, as --stats prints it. And a total that would
+// pass what an int64 holds stops there rather than wrapping.
+func TestTallyOutOfRange(t *testing.T) {
+	step := func(input string) *itemRow {
+		return &itemRow{data: itemData{Usage: &stepUsage{Input: json.RawMessage(input), Output: json.RawMessage("5")}}}
+	}
+	for _, c := range []struct {
+		input string
+		want  int64
+	}{
+		{"1e999", 5},
+		{"-5", 5},
+		{"1.5", 5},
+		{"9007199254740992", 5}, // 1<<53
+		{"9007199254740991", 9007199254740991 + 5},
+		{"12.0", 12 + 5},
+		{`"12"`, 12 + 5},
+	} {
+		s := &session{}
+		tally(s, step(c.input))
+		if !s.hasTokens || s.tokens != c.want {
+			t.Errorf("input_tokens %s: tokens = %d (has %v), want %d", c.input, s.tokens, s.hasTokens, c.want)
+		}
+	}
+	s := &session{}
+	for range 1100 {
+		tally(s, step("9007199254740991"))
+	}
+	if s.tokens != math.MaxInt64 {
+		t.Errorf("tokens after 1100 steps of 1<<53 - 1 = %d, want %d", s.tokens, int64(math.MaxInt64))
 	}
 }
 

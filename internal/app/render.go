@@ -57,8 +57,9 @@ func oneLineText(value string, limit int) string {
 }
 
 // toolSummary is the one-line gist of a tool call: the first known argument
-// that has a value, else the whole arguments. Arguments that were not JSON are
-// kept as a JSON string, which is no object, so they come out as their text.
+// that has a value, else the whole arguments. Arguments that were not JSON, or
+// were a bare JSON string, are kept as a JSON string of their text, which is no
+// object, so they come out as that text.
 func toolSummary(args toolArguments, limit int) string {
 	input := json.RawMessage(args)
 	var keyed map[string]json.RawMessage
@@ -153,7 +154,7 @@ func indentBlock(label, body string, limit int, paint Paint, color int) string {
 		}
 		return "  " + tag + "\n" + strings.Join(lines, "\n")
 	}
-	return "  " + tag + " " + paint.paint(strings.TrimSpace(body), argColor)
+	return "  " + tag + " " + paint.paint(body, argColor)
 }
 
 // outcomeWidth is the right-hand block of a tool line: the mark and the
@@ -216,19 +217,20 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 	}
 
 	// The outcome sits at the right margin so a run of calls scans as a column
-	// of ok/ERR; the summary takes what is left between the name and it, and
-	// yields entirely — the note first — sooner than push past the margin.
+	// of ok/ERR; the summary takes what is left between the name and it. Short
+	// of room, the summary yields entirely and then the name is cut short,
+	// sooner than either push past the margin. The note never yields: it is the
+	// one thing saying the output is not all there. Only a line too narrow for
+	// the note beside a one-cell name runs past the margin and is wrapped, and
+	// the 60 columns the layout is held to never come to that.
 	avail := opts.width - bodyIndent - cells(right) - 2
+	if note != "" {
+		avail -= 1 + cells(note)
+	}
 	if cells(label) > avail {
 		label = truncateCells(label, max(1, avail))
 	}
 	rem := avail - cells(label)
-	if note != "" && rem < 1+cells(note) {
-		note = ""
-	}
-	if note != "" {
-		rem -= 1 + cells(note)
-	}
 	summary := ""
 	if rem >= 10 {
 		summary = toolSummary(args, min(opts.argWidth, rem-1))
@@ -286,8 +288,8 @@ func renderTool(call *toolCall, called int64, result *itemRow, opts *options) []
 	switch {
 	case opts.tools == "full":
 		if input := json.RawMessage(args); truthy(input) {
-			// Arguments that were not JSON are kept as a JSON string, and are
-			// printed as the text the model wrote.
+			// Arguments kept as a JSON string — not JSON, or a bare JSON string
+			// — are printed as the text the model wrote.
 			in := reformatJSON(input, 2)
 			var text string
 			if json.Unmarshal(input, &text) == nil {
@@ -479,7 +481,8 @@ var attachedFile = regexp.MustCompile(`(?m)^<attached_file path=("(?:[^"\\]|\\.)
 //
 // Everything printed from the store goes through neutralise first: bodies are
 // printed as the agent received them, except that escape sequences and
-// control characters are made harmless.
+// control characters are made harmless, format characters that draw nothing
+// are shown as their code points and tabs are expanded to spaces.
 func renderBlock(b block, opts *options) []string {
 	it := b.head
 	data := &it.data
@@ -517,7 +520,30 @@ func renderBlock(b block, opts *options) []string {
 			// has prompts that are a PNG file's bytes, and printed they are
 			// hundreds of lines of noise and control bytes. No typed text has
 			// one.
-			switch text := string(data.Content); {
+			//
+			// The prompt is content, as typed. A row whose content is empty can
+			// still hold one in its text parts, what the model got: serve api
+			// stores what its client sent. Then the text parts are the prompt,
+			// each up to the first text file inlined into it, with a blank line
+			// between them, as docker-agent's own transcript has it.
+			text := string(data.Content)
+			if strings.TrimSpace(text) == "" {
+				var parts []string
+				for _, p := range data.MultiContent {
+					if p.Type != "text" {
+						continue
+					}
+					part := string(p.Text)
+					if loc := attachedFile.FindStringIndex(part); loc != nil {
+						part = part[:loc[0]]
+					}
+					if part = strings.TrimRightFunc(part, unicode.IsSpace); part != "" {
+						parts = append(parts, part)
+					}
+				}
+				text = cmp.Or(strings.Join(parts, "\n\n"), text)
+			}
+			switch {
 			case strings.Contains(text, "\x00"):
 				add(paint.paint(fmt.Sprintf("not shown: binary data (%d bytes)", len(text)), dim))
 			default:
@@ -535,7 +561,8 @@ func renderBlock(b block, opts *options) []string {
 					// it into the text part, after what was typed. It is named
 					// like any other attachment; its text, and the note on a
 					// resized image, are what the model was given and are left
-					// out like an image's bytes.
+					// out like an image's bytes. A prompt held in the text parts
+					// alone (above) keeps a note that comes before the first file.
 					rest := strings.TrimPrefix(string(p.Text), string(data.Content))
 					for _, m := range attachedFile.FindAllStringSubmatch(rest, -1) {
 						name := ""
@@ -772,36 +799,32 @@ const (
 	tagClose = "❭"
 )
 
-// ongoing reports whether a session was already running when the window
-// opened, so its banner announces a conversation joined part-way rather than
-// one starting here. It is a fact about the session rather than about the
-// output — with --all nothing predates the window and every session begins in
-// view — and it is asked only of a session's first banner, since a later one
-// has a nearer answer to give.
-func ongoing(s *session, since *int64) bool {
-	return since != nil && s.timeCreated < *since
-}
-
 // bannerFlag picks the flag a banner opens with. Two different things put a
 // session's beginning out of view and they are not answered the same way: a
-// session already running when the window opened has the rest of itself
-// outside the window, and widening --since is what fetches it; a session the
-// stream left and came back to has the rest of itself further up this same
-// output, and scrolling is what fetches it. A flag each, and the plain one for
-// a session that starts where it says it does, leaves nothing to be inferred
-// from a tag the reader would first have to remember having seen.
+// session the window cut into — above is set when a block of it was left out
+// as older than --since — has the rest of itself outside the window, and
+// widening --since is what fetches it; a session the stream left and came back
+// to has the rest of itself further up this same output, and scrolling is what
+// fetches it. A flag each, and the plain one for a session that starts where
+// it says it does, leaves nothing to be inferred from a tag the reader would
+// first have to remember having seen.
+//
+// What the window cut is read off the blocks it left out, not off the
+// session's start: a session is created when its tab opens, possibly long
+// before its first prompt, and a fork after the history it copies. With --all
+// nothing is cut and every session begins in view.
 //
 // A late banner says the most: what follows it belongs further up, among what
 // was printed before it — a subagent that ran in the background, a step held
 // while other sessions went on, a session forked with its old stamps. It wins
 // over the rest.
-func bannerFlag(s *session, since *int64, seen, late bool) string {
+func bannerFlag(above, seen, late bool) string {
 	switch {
 	case late:
 		return lateFlag
 	case seen:
 		return backFlag
-	case ongoing(s, since):
+	case above:
 		return joinFlag
 	}
 	return newFlag
@@ -848,7 +871,7 @@ func sessionBanner(s *session, flag string, paint Paint, width int) []string {
 	// an answer, so below whereFloor the path is dropped and the title takes
 	// the width back. Like the table's floors this one is not owed — a path
 	// short enough to fit whole is drawn whole, however little room there is.
-	title, where := titleOf(s), neutralise(homeTilde(s.directory))
+	title, where := titleOf(s), neutraliseLine(homeTilde(s.directory))
 	w := max(0, room-min(cells(title), titleFloor)-2)
 	if w < min(cells(where), whereFloor) {
 		w = 0
@@ -878,7 +901,11 @@ func sessionBanner(s *session, flag string, paint Paint, width int) []string {
 	// solid, the title a lighter step, one object across the line. One hue for
 	// every banner: it says a line is a banner, and the tag beside it says
 	// which.
-	rule := paint.paint(strings.Repeat(glyph, max(1, width)), sessionColor)
+	//
+	// The rule is measured, not counted: under East Asian width a box-drawing
+	// glyph takes two cells, and width of them would be a rule twice the width.
+	// An odd cell over is left blank.
+	rule := paint.paint(strings.Repeat(glyph, max(1, width)/cells(glyph)), sessionColor)
 	body := paint.paint(title, sessionTitle)
 	if where != "" {
 		body = padTo(body, paint.paint(where, sessionWhere), room)
@@ -896,5 +923,5 @@ func titleOf(s *session) string {
 	if s.title == "" {
 		return "(untitled)"
 	}
-	return neutralise(s.title)
+	return neutraliseLine(s.title)
 }

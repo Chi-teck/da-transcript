@@ -284,9 +284,8 @@ all projects  all time  4 session(s)
   │     … [10 more chars]
   │   out
   │     building
-  │     see run 7 for the log
-  │     progress
-  │     … [41 more chars]
+  │     see ␛]8;;https://ci.example/run
+  │     … [79 more chars]
   │ shell nohup ./server &                                                               ok       1s
   │   in
   │     {
@@ -312,8 +311,8 @@ all projects  all time  4 session(s)
   │     … [1 more chars]
   │   err
   │     Command timed out after 30s
-  │     Output: runn
-  │     … [12 more chars]
+  │     Output: ---
+  │     … [188 more chars]
   │ shell ls -la /proj                                                                  ERR       2s
   │   in ls -la /proj
   │   err

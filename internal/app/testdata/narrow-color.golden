@@ -301,7 +301,8 @@
   [38;5;180m│[0m     [38;5;250m}[0m
   [38;5;180m│[0m   [38;5;244mout[0m
   [38;5;180m│[0m     [38;5;250mbuilding[0m
-  [38;5;180m│[0m     [38;5;250msee run 7 for the log[0m
+  [38;5;180m│[0m     [38;5;250msee ␛]8;;https://ci.example/run/7␛\run 7␛]8;;␛\ for[0m
+  [38;5;180m│[0m     [38;5;250mthe log[0m
   [38;5;180m│[0m     [38;5;250mprogress 10%␍50%␍100%[0m
   [38;5;180m│[0m     [38;5;250mtest_a FAIL␇[0m
   [38;5;180m│[0m     [38;5;250mnul:␀ esc:␛ end[0m
@@ -335,7 +336,11 @@
   [38;5;180m│[0m     [38;5;250m}[0m
   [38;5;180m│[0m   [38;5;203merr[0m
   [38;5;180m│[0m     [38;5;250mCommand timed out after 30s[0m
-  [38;5;180m│[0m     [38;5;250mOutput: running 12 tests[0m
+  [38;5;180m│[0m     [38;5;250mOutput: --- FAIL: TestParse (0.00s)[0m
+  [38;5;180m│[0m             [38;5;250mparse_test.go:42: Parse("a, b") kept the[0m
+  [38;5;180m│[0m             [38;5;250mspace after the comma: got ["a" " b"][0m
+  [38;5;180m│[0m     [38;5;250mFAIL    example.com/proj/parse  0.012s[0m
+  [38;5;180m│[0m     [38;5;250mok      example.com/proj/lex    0.003s[0m
   [38;5;180m│[0m [38;5;244mshell[0m [38;5;250mls -la /proj[0m                          [1;38;5;203mERR[0m[38;5;240m       2s[0m
   [38;5;180m│[0m   [38;5;244min[0m [38;5;250mls -la /proj[0m
   [38;5;180m│[0m   [38;5;203merr[0m [38;5;250mError calling tool: invalid character 'l' looking[0m

@@ -4,14 +4,17 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // database/sql driver, pure Go
+	"modernc.org/sqlite" // database/sql driver, pure Go
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // The store is opened read-only and nothing here writes to it. The traps this
@@ -26,7 +29,9 @@ import (
 const chunkSize = 500
 
 type store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
+	file os.FileInfo // what path named when the store was opened: see unchanged
 }
 
 type sessionRow struct {
@@ -54,16 +59,23 @@ type itemRow struct {
 	data        itemData // message_json decoded (payload.go); a summary's usage_json lands in data.Usage
 	unknown     string   // non-empty when this version cannot read the item: what to call it
 	timeCreated int64    // epoch ms: its own created_at, else the previous item's, else its session's start
+	borrowed    bool     // timeCreated is not its own created_at
 }
 
 // openStore opens the database read-only and probes it, so a missing file, an
 // unreadable WAL, a file that is not a database or a database docker-agent
-// v1.113 has not migrated all fail here, with a one-line message, rather than
-// on the first query.
+// v1.113 has not migrated all fail here, with a one-line message (two when the
+// fix is the -wal and -shm files), rather than on the first query.
 func openStore(ctx context.Context, path string) (*store, error) {
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
+	if errors.Is(err, fs.ErrNotExist) || err == nil && info.IsDir() {
 		return nil, fmt.Errorf("no docker-agent database at %s (try --db)", path)
+	}
+	if err != nil {
+		if pe, ok := errors.AsType[*fs.PathError](err); ok {
+			err = pe.Err
+		}
+		return nil, fmt.Errorf("cannot open %s read-only: %v", path, err)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -98,12 +110,42 @@ func openStore(ctx context.Context, path string) (*store, error) {
 		if db != nil {
 			_ = db.Close()
 		}
-		// The newline is deliberate: the second line names the fix.
-		//nolint:staticcheck // ST1005: user-facing CLI text, not a wrapped error
-		return nil, fmt.Errorf("cannot open %s read-only: %v\n"+
-			"docker-agent uses WAL; the -wal and -shm files next to it must be readable too.", path, err)
+		// A second line names the fix when it is the WAL files: SQLite could
+		// not open one of the three (CANTOPEN), or could not make the -shm a
+		// read-only handle needs (READONLY_CANTINIT). Not for a file that is
+		// not a database at all. Extended codes keep the primary in the low byte.
+		hint := ""
+		if se, ok := errors.AsType[*sqlite.Error](err); ok {
+			switch se.Code() & 0xff {
+			case sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_READONLY:
+				hint = "\ndocker-agent uses WAL; the -wal and -shm files next to it must be readable too."
+			}
+		}
+		return nil, fmt.Errorf("cannot open %s read-only: %v%s", path, err, hint)
 	}
-	return &store{db: db}, nil
+	return &store{db: db, path: path, file: info}, nil
+}
+
+// unchanged says whether path still names the file the store was opened on.
+// The connection holds that file open, so one removed, or removed and made
+// anew — the data dir wiped, a backup put back — goes on being read as it
+// was, with nothing new in it ever, and a new store's ids start again below
+// any cursor. Held open, its inode cannot be handed to the new file, so
+// SameFile cannot mistake one for the other.
+func (s *store) unchanged() error {
+	info, err := os.Stat(s.path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%s was removed while following", s.path)
+	case err != nil:
+		if pe, ok := errors.AsType[*fs.PathError](err); ok {
+			err = pe.Err
+		}
+		return fmt.Errorf("cannot read %s: %v", s.path, err)
+	case !os.SameFile(info, s.file):
+		return fmt.Errorf("%s was replaced while following (run again to follow the new one)", s.path)
+	}
+	return nil
 }
 
 // uriEscape escapes the characters that would be mis-read inside a file: URI.
@@ -138,8 +180,13 @@ func (s *store) sessions(ctx context.Context, root string) ([]sessionRow, error)
 		// would fold /foo into /Foo — two unrelated projects on a case-sensitive
 		// filesystem — while the `dir = ?` half beside it stays exact. Both
 		// halves of the predicate have to agree, and comparing the prefix
-		// outright is also the end of the escaping the like form needed.
-		prefix := root + string(filepath.Separator)
+		// outright is also the end of the escaping the like form needed. The
+		// filesystem root already ends in the separator, and a second one would
+		// match nothing.
+		prefix := root
+		if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+			prefix += string(filepath.Separator)
+		}
 		query += " where d.dir = ? or substr(d.dir, 1, length(?)) = ?"
 		args = append(args, root, prefix, prefix)
 	}
@@ -249,9 +296,10 @@ type cursor struct {
 // lane is how far one session has been printed. What a session printed is
 // always a prefix of its positions, so a round reads it from next on.
 type lane struct {
-	next int64 // the first position neither printed nor skipped
-	at   int64 // the time of the item before next — or the session's start — for an untimed item at next
-	held bool  // the round stopped inside this session, so it is read again whatever changed
+	next  int64 // the first position neither printed nor skipped
+	at    int64 // the time of the item before next — or the session's start — for an untimed item at next
+	held  bool  // the round stopped inside this session, so it is read again whatever changed
+	above bool  // a block was skipped as older than --since: the session's first banner, rounds later or not, says there is more above
 }
 
 // lastID is the highest item id in the store: where the first --follow round
@@ -323,6 +371,8 @@ func scanItems(rows *sql.Rows, err error, start func(sid string) int64) ([]itemR
 		// A created_at that does not parse is as good as none.
 		if ms, ok := parseStamp(string(r.data.CreatedAt)); ok {
 			prev = ms
+		} else {
+			r.borrowed = true
 		}
 		r.timeCreated = prev
 		out = append(out, r)

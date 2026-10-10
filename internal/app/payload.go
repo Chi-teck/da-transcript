@@ -100,9 +100,11 @@ type stepUsage struct {
 // JSON the model wrote, decoded a second time here. JSON is kept raw and not
 // re-encoded, so the model's key order survives into the in: block. Anything
 // else — malformed arguments, plain text — is kept as a JSON string of that
-// text, so it stays printable, and "" is nil. An arguments value that is
-// already an object comes through flexString as its compact JSON. It never
-// fails the row.
+// text, so it stays printable, and "" is nil. A bare JSON string is kept the
+// same way, its quotes and escapes part of the text: kept raw, it would print
+// as the text inside, like arguments that were not JSON. An arguments value
+// that is already an object comes through flexString as its compact JSON. It
+// never fails the row.
 type toolArguments json.RawMessage
 
 func (a *toolArguments) UnmarshalJSON(data []byte) error {
@@ -111,7 +113,7 @@ func (a *toolArguments) UnmarshalJSON(data []byte) error {
 	switch {
 	case s == "":
 		*a = nil
-	case json.Valid([]byte(s)):
+	case json.Valid([]byte(s)) && bytes.TrimSpace([]byte(s))[0] != '"':
 		*a = toolArguments(s)
 	default:
 		// Not json.Marshal: it would write a shell command's && and > as
