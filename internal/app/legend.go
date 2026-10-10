@@ -10,13 +10,14 @@ import (
 	"strings"
 )
 
-// legend is the session table --list prints, and the transcript's key. `ruled`
-// picks between them, and they differ in two ways.
+// legend is the session table --list prints, and the transcript's key. `list`
+// picks between them. Both are boxed — the two are the same object, and the
+// box is what says where the key stops and the first session starts — and they
+// differ in two ways.
 //
-// In furniture: `ruled` boxes the table in and adds a foot line under it, which
-// is worth the width and the four extra rows when the table is the whole
-// output, and not when it is a key over a transcript that rules its own blocks
-// and is already headed by a summary saying what the foot line would.
+// In the foot line: `list` adds one under the box, which is worth the row when
+// the table is the whole output, and not over a transcript already headed by a
+// summary saying what the foot line would.
 //
 // And in columns. The key names a session and says where and when — the tag is
 // the only handle a reader needs, and --session matches on it. The table is
@@ -25,7 +26,7 @@ import (
 // what it spent. Those describe the whole session, never the window; the window
 // only decides which rows are here at all, the way it already does for the
 // start time beside them. `counts` carries the message tallies and is read only
-// when `ruled` is set.
+// when `list` is set.
 //
 // Columns are budgeted, not measured: the narrow fixed ones take their natural
 // width, `where` and `title` split what is left — `where` cut from the left,
@@ -37,7 +38,7 @@ import (
 // in the terminal's own foreground the way message text is: a session table is
 // read for what is in it, and hues on a tag or a path would be saying
 // something about the columns that is not true.
-func legend(used []*session, root string, width int, ruled bool, counts map[string]int, paint Paint) []string {
+func legend(used []*session, root string, width int, list bool, counts map[string]int, paint Paint) []string {
 	if len(used) == 0 {
 		return nil
 	}
@@ -48,7 +49,7 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 	whereIdx, titleIdx := 2, 3
 	// The columns holding a figure, which is read from its right-hand end.
 	var numeric []int
-	if ruled {
+	if list {
 		heads = []string{"Session", "Where", "Started", "Span", "Messages", "Tokens", "Title"}
 		whereIdx, titleIdx = 1, 6
 		numeric = []int{3, 4, 5}
@@ -66,7 +67,7 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 			}
 		}
 		where = neutralise(homeTilde(where))
-		if !ruled {
+		if !list {
 			rows = append(rows, []string{s.tag, shortStamp(s.timeCreated), where, titleOf(s)})
 			continue
 		}
@@ -83,11 +84,7 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 	}
 	// budget() strikes its widths for a bare table; a frame costs more than
 	// that, and the widths have to be struck knowing it.
-	avail := width
-	if ruled {
-		avail -= frameCost(len(heads))
-	}
-	widths := budget(avail, naturals, whereIdx, titleIdx)
+	widths := budget(width-frameCost(len(heads)), naturals, whereIdx, titleIdx)
 	for _, r := range rows {
 		r[whereIdx] = tailCells(r[whereIdx], widths[whereIdx])
 		r[titleIdx] = truncateCells(r[titleIdx], widths[titleIdx])
@@ -100,11 +97,11 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 			r[i] = rjust(r[i], widths[i])
 		}
 	}
-	if ruled {
-		out := framedTable(heads, rows, widths, width, paint)
-		return append(out, legendFooter(len(ordered), ordered[0].timeCreated, width, paint))
+	out := framedTable(heads, rows, widths, width, paint)
+	if list {
+		out = append(out, legendFooter(len(ordered), ordered[0].timeCreated, width, paint))
 	}
-	return table(heads, rows, widths, width, paint)
+	return out
 }
 
 // tally adds one item to its session's --list figures. build() hands it every

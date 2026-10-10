@@ -50,24 +50,6 @@ func TestBudget(t *testing.T) {
 	}
 }
 
-func TestTable(t *testing.T) {
-	heads, rows, widths := []string{"A", "B"}, [][]string{{"x", "yy"}, {"zzz", ""}}, []int{3, 2}
-	got := table(heads, rows, widths, 40, Paint{})
-	want := []string{"A    B", "x    yy", "zzz"}
-	if !slices.Equal(got, want) {
-		t.Errorf("table = %q, want %q", got, want)
-	}
-	// Painted, only the heads take a hue, and only the word in each — never
-	// the padding after it, which the trim at the end still has to see.
-	lit := table(heads, rows, widths, 40, Paint{enabled: true})
-	if lit[0] != fg(headColor, "1")+"A"+reset+"    "+fg(headColor, "1")+"B"+reset {
-		t.Errorf("painted heads = %q", lit[0])
-	}
-	if !slices.Equal(lit[1:], got[1:]) {
-		t.Errorf("painted rows = %q, want %q", lit[1:], got[1:])
-	}
-}
-
 func TestFramedTable(t *testing.T) {
 	heads, rows, widths := []string{"A", "B"}, [][]string{{"x", "yy"}, {"zzz", ""}}, []int{3, 2}
 	got := framedTable(heads, rows, widths, 40, Paint{})
@@ -93,8 +75,8 @@ func TestFramedTable(t *testing.T) {
 		}
 	}
 
-	// Painted, the furniture wears a hue and the cells do not, and nothing the
-	// paint added is measurable.
+	// Painted, the furniture wears a hue and the cells do not, a head's hue
+	// stops at its last letter, and nothing the paint added is measurable.
 	lit := framedTable(heads, rows, widths, 40, Paint{enabled: true})
 	pipe, rules, heading := fg(dim)+"│"+reset, fg(dim), fg(headColor, "1")
 	if lit[0] != rules+"┌─────┬────┐"+reset {

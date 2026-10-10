@@ -45,7 +45,8 @@ func TestLegendWhereRelativeToRoot(t *testing.T) {
 }
 
 // The --list table ends on a foot rule and a line counting what is above it,
-// back to the earliest row's date. The transcript's key gets neither.
+// back to the earliest row's date. The transcript's key is boxed the same way
+// but gets no foot line: the summary over it already says what that would.
 func TestLegendFooter(t *testing.T) {
 	d := zooDB(t)
 	t.Setenv("COLUMNS", "")
@@ -68,6 +69,10 @@ func TestLegendFooter(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "sessions since") {
 		t.Error("the transcript's key grew a footer")
+	}
+	// The summary, a blank line, then the box.
+	if key := strings.Split(stdout.String(), "\n")[2]; !strings.HasPrefix(key, "┌") {
+		t.Errorf("key opens on %q, want the box", key)
 	}
 }
 

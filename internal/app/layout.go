@@ -196,27 +196,6 @@ func budget(width int, naturals []int, whereIdx, titleIdx int) []int {
 	return widths
 }
 
-// table lays heads and rows out on the given widths: cells padded right,
-// two-space gutters, no rule row, nothing trailing. Cells must already be
-// cut to their column's width; the clamp against `width` only guards the
-// invariant, for the budgets too narrow to strike one that fits.
-func table(heads []string, rows [][]string, widths []int, width int, paint Paint) []string {
-	gutter := strings.Repeat(" ", tableGutter)
-	return layTable(heads, rows, widths, width, furniture{gutter: gutter, paint: paint})
-}
-
-// What a table draws around and between its cells: the two edges of a row and
-// the gutter between two columns, all of them bare, since a row is measured
-// before anything is painted. The zero value is a table with no edges and no
-// rules — the transcript's key.
-type furniture struct {
-	left   string
-	gutter string
-	right  string
-	framed bool
-	paint  Paint
-}
-
 const (
 	// A framed row: an edge either side and a vertical between every pair of
 	// columns, each with a space between it and the cell it touches, so nothing
@@ -232,27 +211,21 @@ const (
 // gutters and two cells at each end.
 func frameCost(cols int) int { return (cols - 1) + 2*cells(frameLeft) }
 
-// framedTable is table() in a box: the columns divided by verticals rather
-// than by space, and three horizontals — over the heads, under them, and under
-// the last row — meeting the verticals at corners and junctions. Furniture end
-// to end, so it all goes in the quietest grey there is when colour is on.
+// framedTable lays heads and rows out on the given widths in a box: cells
+// padded right, the columns divided by verticals, and three horizontals — over
+// the heads, under them, and under the last row — meeting the verticals at
+// corners and junctions. Furniture end to end, so it all goes in the quietest
+// grey there is when colour is on, which is also what lets the transcript's
+// key sit above the session rules without competing with them.
 //
-// It is what --list prints, where the table is the whole output: the rules
-// carry the eye across a row, and the box says where the table stops without
-// the reader having to work it out from the alignment. The transcript's key
-// stays plain, since it sits above rules of its own and a second grid there
-// would compete with them.
+// It is what --list prints and what the transcript opens on: the rules carry
+// the eye across a row, and the box says where the table stops without the
+// reader having to work it out from the alignment.
 //
-// The frame is not free — see frameCost, which the caller has to have taken out
-// of the budget before striking the widths.
-func framedTable(heads []string, rows [][]string, widths []int, width int, paint Paint) []string {
-	return layTable(heads, rows, widths, width, furniture{
-		left: frameLeft, gutter: frameGutter, right: frameRight, framed: true, paint: paint,
-	})
-}
-
-// layTable is the body of both: cells cut and padded to their column, joined
-// on a gutter, the row clamped to the width.
+// Cells must already be cut to their column's width; the clamp against
+// `width` only guards the invariant, for the budgets too narrow to strike one
+// that fits. The frame is not free either — see frameCost, which the caller
+// has to have taken out of the budget before striking the widths.
 //
 // The clamp is why a row is assembled twice. A row is measured before it is
 // painted — the rule the whole file keeps — so it is put together bare, and
@@ -260,67 +233,48 @@ func framedTable(heads []string, rows [][]string, widths []int, width int, paint
 // on. A row that overflows is cut instead, and gives up its colour with the
 // cells it loses; nothing else here can overflow, so that is a pathologically
 // narrow terminal or nothing.
-func layTable(heads []string, rows [][]string, widths []int, width int, f furniture) []string {
+func framedTable(heads []string, rows [][]string, widths []int, width int, paint Paint) []string {
 	// lit paints the verticals in a piece of furniture and leaves the spaces
 	// flanking them alone: a span around a blank cell shows nothing and says
 	// nothing. Cells never go through here, so a title that happens to contain
 	// a box-drawing character is left as the session named it.
 	lit := func(s string) string {
-		return strings.ReplaceAll(s, "│", f.paint.paint("│", dim))
+		return strings.ReplaceAll(s, "│", paint.paint("│", dim))
 	}
 	line := func(cs []string, color int, bold bool) string {
+		// An empty last cell is padded out like any other: the right edge has
+		// to be out there whether the last cell has anything in it or not.
 		parts := make([]string, len(cs))
 		for i, c := range cs {
 			parts[i] = ljust(truncateCells(c, widths[i]), widths[i])
 		}
-		if !f.framed {
-			// Trailing empty columns are dropped rather than padded and then
-			// trimmed off, since an unframed row ends wherever its last cell
-			// does. A framed one cannot: the right edge has to be out there
-			// whether the last cell has anything in it or not.
-			for len(parts) > 1 && strings.TrimSpace(parts[len(parts)-1]) == "" {
-				parts = parts[:len(parts)-1]
-			}
-		}
-		if bare := f.left + strings.Join(parts, f.gutter) + f.right; cells(bare) > width {
+		if bare := frameLeft + strings.Join(parts, frameGutter) + frameRight; cells(bare) > width {
 			return truncateCells(strings.TrimRight(bare, " "), width)
 		}
 		if color != noColor {
 			for i, p := range parts {
-				// The word is painted and the padding after it is not: a span
-				// closed past the last letter would carry blank cells the trim
-				// at the end can no longer see, and the row would keep them.
+				// The word is painted and the padding after it is not, for the
+				// reason lit() leaves the spaces alone.
 				word := strings.TrimRight(p, " ")
-				parts[i] = f.paint.paint(word, color, bold) + p[len(word):]
+				parts[i] = paint.paint(word, color, bold) + p[len(word):]
 			}
 		}
-		row := lit(f.left) + strings.Join(parts, lit(f.gutter)) + lit(f.right)
-		if f.framed {
-			return row
-		}
-		return strings.TrimRight(row, " ")
+		return lit(frameLeft) + strings.Join(parts, lit(frameGutter)) + lit(frameRight)
 	}
 	rule := func(left, mid, right string) string {
-		return tableRule(widths, width, left, mid, right, f.paint)
+		return tableRule(widths, width, left, mid, right, paint)
 	}
 	out := make([]string, 0, len(rows)+4)
-	if f.framed {
-		out = append(out, rule("┌", "┬", "┐"))
-	}
+	out = append(out, rule("┌", "┬", "┐"))
 	out = append(out, line(heads, headColor, headBold))
-	if f.framed {
-		out = append(out, rule("├", "┼", "┤"))
-	}
+	out = append(out, rule("├", "┼", "┤"))
 	for _, r := range rows {
 		// Cells stay in the terminal's own foreground, the way message text
 		// does: a hue on a tag or a path would be making a claim about that
 		// column that is not true.
 		out = append(out, line(r, noColor, false))
 	}
-	if f.framed {
-		out = append(out, rule("└", "┴", "┘"))
-	}
-	return out
+	return append(out, rule("└", "┴", "┘"))
 }
 
 // tableRule is one horizontal of a frame. Each segment spans its column and

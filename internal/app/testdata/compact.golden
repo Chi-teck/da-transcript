@@ -1,10 +1,13 @@
 all projects  all time  4 session(s)
 
-Session  Started           Where      Title
-zoo001   2026-08-17 10:00  /proj      Zoo main
-zoo002   2026-08-17 10:00  /proj/sub  (untitled)
-zoo003↓  2026-08-17 10:03  /proj      Transferred task
-zoo004↓  2026-08-17 10:05  /proj      Background agent task
+┌─────────┬──────────────────┬───────────┬───────────────────────┐
+│ Session │ Started          │ Where     │ Title                 │
+├─────────┼──────────────────┼───────────┼───────────────────────┤
+│ zoo001  │ 2026-08-17 10:00 │ /proj     │ Zoo main              │
+│ zoo002  │ 2026-08-17 10:00 │ /proj/sub │ (untitled)            │
+│ zoo003↓ │ 2026-08-17 10:03 │ /proj     │ Transferred task      │
+│ zoo004↓ │ 2026-08-17 10:05 │ /proj     │ Background agent task │
+└─────────┴──────────────────┴───────────┴───────────────────────┘
 
 
  ⚑ ❬zoo001❭ Zoo main                                                                           /proj

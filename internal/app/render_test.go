@@ -882,7 +882,7 @@ func TestStoreTextNeutralised(t *testing.T) {
 		args  []string
 		wants []string
 	}{
-		{[]string{"--stats"}, []string{"aaaaaa   2026-08-18 12:00  /p/dir", "  /p/dir\n", "$0.0000 stop\n"}},
+		{[]string{"--stats"}, []string{"│ aaaaaa  │ 2026-08-18 12:00 │ /p/dir │", "  /p/dir\n", "$0.0000 stop\n"}},
 		{[]string{"--list"}, []string{"│ /p/dir │"}},
 	} {
 		var stdout, stderr bytes.Buffer
