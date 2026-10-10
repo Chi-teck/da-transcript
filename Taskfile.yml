@@ -32,6 +32,13 @@ tasks:
     cmds:
       - 'go run . {{.CLI_ARGS}}'
 
+  # Everything a v* tag would publish, built into ./dist and published
+  # nowhere. Needs goreleaser on PATH; CI installs its own.
+  release:snapshot:
+    desc: 'Build the release archives locally without publishing'
+    cmds:
+      - 'goreleaser release --snapshot --clean'
+
   test:
     desc: 'Run tests (golden files under testdata/)'
     cmds:

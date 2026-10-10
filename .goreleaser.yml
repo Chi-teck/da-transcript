@@ -1,0 +1,45 @@
+# Release build for da-transcript — https://goreleaser.com
+#
+# Driven by .github/workflows/release.yml on a v* tag. To see what a release
+# would produce without tagging or publishing anything:
+#
+#   goreleaser release --snapshot --clean
+version: 2
+
+project_name: da-transcript
+
+before:
+  hooks:
+    - 'go mod download'
+
+builds:
+  # CGO_ENABLED=0 is the documented build: modernc.org/sqlite is pure Go, so
+  # every target below cross-compiles from the Linux runner and the binaries
+  # stay static. -trimpath keeps the build machine's paths out of them.
+  - env:
+      - 'CGO_ENABLED=0'
+    goos: ['linux', 'darwin']
+    goarch: ['amd64', 'arm64']
+    flags: ['-trimpath']
+    ldflags: ['-s -w', '-X github.com/Chi-teck/da-transcript/internal/app.version={{ .Version }}']
+
+archives:
+  - formats: ['tar.gz']
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files: ['README.md', 'LICENSE']
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: 'github'
+  sort: 'asc'
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  # A tag carrying a pre-release suffix (v1.0.0-rc1) is published as one.
+  prerelease: 'auto'
