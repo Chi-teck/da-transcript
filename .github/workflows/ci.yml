@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: ['main', '*.x']
+    branches: ['*.x']
   pull_request:
   # release.yml runs this gate before it publishes anything.
   workflow_call:

@@ -145,7 +145,7 @@ task build         # CGO_ENABLED=0 go build -o da-transcript .
 ```
 
 Expected output is fixed by the golden files in `internal/app/testdata/`. CI runs the
-same checks on every push to `main` or a `*.x` branch and on every pull request;
+same checks on every push to a `*.x` branch and on every pull request;
 pushing a `v*` tag publishes a release.
 
 ## License

@@ -1,8 +1,4 @@
-# Taskfile for the da-transcript project — https://taskfile.dev
-# Run `task` (or `task --list`) to see available commands.
-#
-# The pre-commit gate is the checks list in .claude/CLAUDE.md: gofmt, go vet,
-# golangci-lint, go test.
+# $schema: https://taskfile.dev/schema.json
 version: '3'
 
 vars:
